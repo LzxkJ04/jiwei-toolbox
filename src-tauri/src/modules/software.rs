@@ -228,7 +228,12 @@ fn software_list_paths() -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
+            // 安装后：{app}esources\softwares.json
+            v.push(dir.join("resources").join("softwares.json"));
+            // 开发期：src-tauri/target/{debug|release}/ 与项目根的多级组合
+            v.push(dir.join("..").join("resources").join("softwares.json"));
             v.push(dir.join("..").join("..").join("resources").join("softwares.json"));
+            v.push(dir.join("..").join("..").join("..").join("resources").join("softwares.json"));
         }
     }
     if let Ok(la) = std::env::var("LOCALAPPDATA") {
@@ -246,7 +251,9 @@ fn list_software_inner() -> Vec<Software> {
             }
         }
     }
-    default_software()
+    // 兜底：内嵌构建期清单（resources/softwares.json 随二进制打包，任何位置可用）
+    let text = crate::common::strip_bom(include_str!("../../resources/softwares.json").to_string());
+    serde_json::from_str::<Vec<Software>>(&text).unwrap_or_else(|_| default_software())
 }
 
 /// 获取软件清单

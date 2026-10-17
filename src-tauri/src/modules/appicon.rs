@@ -96,6 +96,7 @@ pub fn app_icon(homepage: String) -> String {
         return String::new();
     };
     // 1) 磁盘缓存命中
+    super::logs::op_log(&load_dirs(), "icon", "lookup", &domain);
     if let Ok(bytes) = std::fs::read(&path) {
         if !bytes.is_empty() {
             return to_data_url(&bytes);
@@ -177,6 +178,7 @@ pub fn app_icon(homepage: String) -> String {
 /// 批量预取（软件库页加载时调用一次，后台静默拉取全部图标）
 #[tauri::command]
 pub fn prefetch_icons(app: tauri::AppHandle, homepages: Vec<String>) {
+    super::logs::op_log(&load_dirs(), "icon", "prefetch_start", &format!("count={}", homepages.len()));
     std::thread::spawn(move || {
         let mut done = 0usize;
         let total = homepages.len();
@@ -217,5 +219,27 @@ mod tests {
         let name = p.file_name().unwrap().to_string_lossy();
         assert!(!name.contains('/') && !name.contains('\\') && !name.contains(':'));
         assert!(name.ends_with(".ico"));
+    }
+}
+
+#[cfg(test)]
+mod net_tests {
+    /// 真实网络探针（需代理环境）：cargo test -- --ignored
+    #[test]
+    #[ignore]
+    fn probe_proxy_fetch() {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:7890").unwrap())
+            .build()
+            .unwrap();
+        let resp = client
+            .get("https://icons.duckduckgo.com/ip3/google.com.ico")
+            .send()
+            .expect("请求失败");
+        assert!(resp.status().is_success());
+        let bytes = resp.bytes().unwrap();
+        assert!(!bytes.is_empty());
+        println!("probe OK: {} bytes", bytes.len());
     }
 }
