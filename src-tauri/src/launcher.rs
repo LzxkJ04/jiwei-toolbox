@@ -67,10 +67,33 @@ pub fn detect_launch_mode() -> LaunchMode {
             LaunchMode::Repair
         } else if args.iter().any(|a| a == "--unattended") {
             LaunchMode::Unattended
-        } else {
+        } else if args.iter().any(|a| a == "--portable") {
             LaunchMode::Main
+        } else {
+            // 无参数启动：未安装（注册表无记录且自身目录无 dirs.json）时自动进入安装向导，
+            // 符合“引导壳 EXE 分发”预期；便携用户加 --portable 跳过。
+            if !is_installed() {
+                LaunchMode::Installer
+            } else {
+                LaunchMode::Main
+            }
         }
     })
+}
+
+/// 是否已安装：注册表 HKCU Dirs 记录存在，或自身目录已有 dirs.json（曾完成安装）
+fn is_installed() -> bool {
+    use winreg::enums::HKEY_CURRENT_USER;
+    let ok = winreg::RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"Software\极维工具箱\Dirs")
+        .is_ok();
+    if ok {
+        return true;
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join("dirs.json").exists()))
+        .unwrap_or(false)
 }
 
 /// 是否主程序模式（lib.rs 据此决定单实例 / 托盘 / 窗口记忆）
