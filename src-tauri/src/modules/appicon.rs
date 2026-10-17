@@ -115,27 +115,49 @@ pub fn app_icon(homepage: String) -> String {
     }
     // 3) 在线拉取（走系统代理）
     let result = (|| -> Option<Vec<u8>> {
-        let mut builder = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(8));
-        // GUI 进程无环境变量代理：从注册表读 Windows 系统代理
-        if let Some(proxy) = system_proxy() {
-            if let Ok(px) = reqwest::Proxy::all(&proxy) {
-                builder = builder.proxy(px);
+        let fetch = |client: &reqwest::blocking::Client| -> Option<Vec<u8>> {
+            let resp = client
+                .get(format!("https://icons.duckduckgo.com/ip3/{}.ico", domain))
+                .send()
+                .ok()?;
+            if !resp.status().is_success() {
+                return None;
+            }
+            let bytes = resp.bytes().ok()?;
+            if bytes.is_empty() || bytes.len() > 512 * 1024 {
+                return None;
+            }
+            Some(bytes.to_vec())
+        };
+        // 1) 系统代理（注册表 ProxyEnable）
+        if let Some(px) = system_proxy().and_then(|p| reqwest::Proxy::all(&p).ok()) {
+            if let Ok(client) = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(8))
+                .proxy(px)
+                .build()
+            {
+                if let Some(b) = fetch(&client) {
+                    return Some(b);
+                }
             }
         }
-        let client = builder.build().ok()?;
-        let resp = client
-            .get(format!("https://icons.duckduckgo.com/ip3/{}.ico", domain))
-            .send()
-            .ok()?;
-        if !resp.status().is_success() {
-            return None;
+        // 2) 直连
+        if let Ok(client) = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(6)).build() {
+            if let Some(b) = fetch(&client) {
+                return Some(b);
+            }
         }
-        let bytes = resp.bytes().ok()?;
-        if bytes.is_empty() || bytes.len() > 512 * 1024 {
-            return None;
+        // 3) 本地常见代理端口兜底（Clash/V2Ray 类，失败无害）
+        for port in ["7890", "7897", "10809"] {
+            if let Ok(px) = reqwest::Proxy::all(&format!("http://127.0.0.1:{}", port)) {
+                if let Ok(client) = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(6)).proxy(px).build() {
+                    if let Some(b) = fetch(&client) {
+                        return Some(b);
+                    }
+                }
+            }
         }
-        Some(bytes.to_vec())
+        None
     })();
     // 4) 释放在途标记
     if let Ok(mut guard) = INFLIGHT.lock() {
