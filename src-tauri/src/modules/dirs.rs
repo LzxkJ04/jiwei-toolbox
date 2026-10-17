@@ -411,3 +411,46 @@ mod tests {
         assert!(validate_dir_pair(r"C:\Program Files\极维工具箱", r"D:\Data").is_ok());
     }
 }
+
+
+/// 修改缓存目录（log 派生为 cache 下的 logs 子目录），写回 dirs.json 并创建目录
+#[tauri::command]
+pub fn set_cache_dir(new_cache: String) -> Result<(), String> {
+    let nc = new_cache.trim().to_string();
+    if nc.is_empty()
+        || nc.len() > 200
+        || nc.contains("..")
+        || nc.contains('/')
+        || nc.contains('*')
+        || nc.contains('?')
+        || nc.contains('"')
+        || nc.contains('<')
+        || nc.contains('>')
+        || nc.contains('|')
+    {
+        return Err("缓存目录非法".into());
+    }
+    let mut d = load_dirs();
+    d.cache = nc.clone();
+    d.log = format!("{}\\logs", nc);
+    // 纯 ASCII 转义 JSON（无 BOM），写程序目录与配置目录
+    let esc = |v: &str| crate::launcher::json_escape_ascii(v);
+    let json = format!(
+        "{{\n  \"program\": \"{}\",\n  \"data\": \"{}\",\n  \"config\": \"{}\",\n  \"backup\": \"{}\",\n  \"cache\": \"{}\",\n  \"log\": \"{}\"\n}}",
+        esc(&d.program), esc(&d.data), esc(&d.config), esc(&d.backup), esc(&d.cache), esc(&d.log)
+    );
+    let mut wrote = false;
+    let prog_json = std::path::PathBuf::from(&d.program).join("dirs.json");
+    if prog_json.parent().map(|x| x.exists()).unwrap_or(false) {
+        if std::fs::write(&prog_json, json.as_bytes()).is_ok() {
+            wrote = true;
+        }
+    }
+    if !wrote {
+        let cfg = std::path::PathBuf::from(&d.config).join("dirs.json");
+        std::fs::create_dir_all(cfg.parent().unwrap()).map_err(|e| e.to_string())?;
+        std::fs::write(&cfg, json.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    std::fs::create_dir_all(&nc).map_err(|e| format!("创建目录失败: {}", e))?;
+    Ok(())
+}

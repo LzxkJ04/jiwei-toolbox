@@ -276,6 +276,7 @@ pub fn run() {
             launcher::inst_finish,
             launcher::unins_start,
             launcher::relaunch_repair,
+            launcher::relaunch_portable,
             launcher::repair_start,
             launcher::inst_detect_existing,
             // 进程检测与关闭
@@ -289,6 +290,7 @@ pub fn run() {
             inventory::open_path,
             appicon::app_icon,
             appicon::prefetch_icons,
+            dirs::set_cache_dir,
             // 磁盘 SMART / 温度
             hardware::disk_smart,
             hardware::cpu_temp,

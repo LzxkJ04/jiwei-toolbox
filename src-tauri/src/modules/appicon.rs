@@ -158,6 +158,18 @@ pub fn app_icon(homepage: String) -> String {
                 }
             }
         }
+        // 4) 国内 favicon 直连源（无需代理）
+        if let Ok(client) = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(6)).build() {
+            if let Ok(resp) = client.get(format!("https://api.iowen.cn/favicon/{}.png", domain)).send() {
+                if resp.status().is_success() {
+                    if let Ok(bytes) = resp.bytes() {
+                        if !bytes.is_empty() && bytes.len() <= 512 * 1024 {
+                            return Some(bytes.to_vec());
+                        }
+                    }
+                }
+            }
+        }
         None
     })();
     // 4) 释放在途标记

@@ -19,6 +19,9 @@ import {
   getAutoBackupInventory, setAutoBackupInventory, setLogRetention,
   relaunchRepair, checkUpdate,
   type CacheStats, type UpdateInfo,
+  setCacheDir,
+  instChooseDir,
+  getDirs,
 } from "../lib/tauri";
 import { formatBytes } from "../lib/utils";
 import { toast } from "../lib/toast";
@@ -119,7 +122,26 @@ async function persistSetting(key: string, value: string, msg?: string) {
   if (ok !== null && msg) toast(msg, "success");
 }
 
+const cacheDir = ref("");
+const changingCache = ref(false);
+
+async function changeCacheDir() {
+  const d = await instChooseDir();
+  if (!d) return;
+  changingCache.value = true;
+  const ok = await setCacheDir(d);
+  changingCache.value = false;
+  if (ok !== null) {
+    cacheDir.value = d;
+    toast("缓存目录已更新", "success");
+  } else {
+    toast("修改失败：目录非法或写入失败", "error");
+  }
+}
+
 onMounted(async () => {
+  const dirs = await getDirs();
+  if (dirs) cacheDir.value = (dirs as unknown as Record<string, string>).cache || "";
   void getAutostart().then((v) => (autostart.value = v ?? false));
   void cacheStats().then((s) => (stats.value = s));
 
@@ -338,7 +360,11 @@ async function doReset() {  theme.setMode("dark");
       <Card class="p-5">
         <div class="mb-3 flex items-center justify-between">
           <h4 class="font-semibold">缓存管理</h4>
+            <div class="mb-2 w-full truncate text-xs text-[var(--muted)]" :title="cacheDir">当前缓存目录：{{ cacheDir || "读取中…" }}</div>
           <div class="flex gap-2">
+            <Button variant="gray" size="sm" :disabled="changingCache" title="选择新的缓存目录（原缓存文件保留在原位置）" @click="changeCacheDir">
+              {{ changingCache ? "修改中…" : "修改缓存目录" }}
+            </Button>
             <Button variant="gray" size="sm" @click="cacheDialogOpen = true">
               打开缓存管理
             </Button>

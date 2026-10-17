@@ -437,6 +437,17 @@ pub fn unins_start(app: AppHandle, keep_data: bool) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 /// 从主程序设置页重启进入修复模式：spawn 自身 --repair（detached）后退出当前进程
+/// 以 --portable 重启自身（便携模式，跳过首装安装向导）
+#[tauri::command]
+pub fn relaunch_portable() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    std::process::Command::new(&exe)
+        .arg("--portable")
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    std::process::exit(0);
+}
+
 #[tauri::command]
 pub fn relaunch_repair() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("定位自身失败: {e}"))?;
@@ -465,7 +476,7 @@ fn repair_emit_progress(app: &AppHandle, stage: &str, pct: i32, msg: &str) {
 
 /// JSON 字符串转义为纯 ASCII（非 ASCII 字符转 \uXXXX，含代理对），
 /// 与 jiwei-logic.iss ssPostInstall 的 JsonEscUnicode 输出格式一致
-fn json_escape_ascii(s: &str) -> String {
+pub(crate) fn json_escape_ascii(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 16);
     for c in s.chars() {
         let v = c as u32;

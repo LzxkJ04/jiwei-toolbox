@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import Button from "../components/ui/Button.vue";
 import ConfirmDialog from "../components/ui/ConfirmDialog.vue";
+import { relaunchPortable } from "../lib/tauri";
 import {
   instChooseDir,
   instDiskFree,
@@ -175,6 +176,7 @@ const openCfg = ref(false);
 
 /* —— 取消 —— */
 const showCancel = ref(false);
+const showPortable = ref(false);
 async function onCancel() {
   await instCancel();
   window.close();
@@ -268,6 +270,12 @@ function canNext() {
               <circle cx="176" cy="18" r="10" fill="var(--primary)" opacity=".85" />
               <path d="M176 13v10M171 18h10" stroke="#fff" stroke-width="2" stroke-linecap="round" />
             </svg>
+          </div>
+          <div class="mt-4 text-center">
+            <button class="text-[13px] text-[var(--text-sub)] underline-offset-4 transition-colors hover:text-[var(--primary)] hover:underline"
+              @click="showPortable = true">
+              不安装，直接以便携模式运行
+            </button>
           </div>
         </section>
 
@@ -416,6 +424,10 @@ function canNext() {
         </Button>
       </div>
     </div>
+
+    <ConfirmDialog :open="showPortable" title="便携模式"
+      message="便携模式不写注册表、不创建快捷方式，直接以当前位置运行主程序。确定继续？"
+      confirm-text="以便携模式运行" @update:open="showPortable = $event" @confirm="relaunchPortable()" />
 
     <ConfirmDialog :open="showCancel" title="退出安装" message="确定退出安装？已复制的文件将会自动清理回滚。"
       confirm-text="确认退出" danger @update:open="showCancel = $event" @confirm="onCancel" />

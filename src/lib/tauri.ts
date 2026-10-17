@@ -574,3 +574,8 @@ export const appIcon = (homepage: string) => tryCall<string>("app_icon", { homep
 /** 后台批量预取图标（软件库加载后调用），进度经 icon-prefetch 事件推送 */
 export const prefetchIcons = (homepages: string[]) =>
   tryCall<null>("prefetch_icons", { homepages });
+
+/** 以 --portable 重启自身（便携模式，跳过安装向导） */
+export const relaunchPortable = () => tryCall<null>("relaunch_portable");
+/** 修改缓存目录（log 派生），写回 dirs.json 并创建目录 */
+export const setCacheDir = (newCache: string) => tryCall<null>("set_cache_dir", { newCache });
