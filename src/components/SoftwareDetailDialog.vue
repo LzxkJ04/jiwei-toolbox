@@ -110,7 +110,7 @@ async function openSoftware() {
     <div v-if="props.item" class="relative">
       <!-- 标题栏：图标 + 名称 + 版本 + 关闭 -->
       <div class="mb-4 flex items-start gap-3 pr-8">
-        <SoftwareIcon :name="props.item?.name || ''" :homepage="props.item?.homepage" size="h-12 w-12" />
+        <SoftwareIcon :item="props.item" size="h-12 w-12" />
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2">
             <h3 class="truncate text-lg font-bold text-[var(--text-strong)]">

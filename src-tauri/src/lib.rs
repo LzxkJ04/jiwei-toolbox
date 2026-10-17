@@ -24,7 +24,7 @@ fn greet(name: &str) -> String {
     format!("你好, {}! 来自极维工具箱后端。", name)
 }
 
-use modules::{backup, cache, common, dirs, drivers, hardware, inventory, license, logs, software, systools, taskopts, uninstall, updater, webview2};
+use modules::{appicon, backup, cache, common, dirs, drivers, hardware, inventory, license, logs, software, systools, taskopts, uninstall, updater, webview2};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{MenuBuilder, MenuItem, PredefinedMenuItem},
@@ -287,6 +287,8 @@ pub fn run() {
             inventory::delete_inventory,
             inventory::rename_inventory,
             inventory::open_path,
+            appicon::app_icon,
+            appicon::prefetch_icons,
             // 磁盘 SMART / 温度
             hardware::disk_smart,
             hardware::cpu_temp,

@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { listInstalled, listSoftware, type InstalledApp, type SoftwareItem } from "../lib/tauri";
+import { listInstalled, listSoftware, type InstalledApp, type SoftwareItem, prefetchIcons } from "../lib/tauri";
 
 /** 软件库数据：远程清单 + 本机安装状态匹配 */
 export const useSoftwareStore = defineStore("software", {
@@ -74,6 +74,10 @@ export const useSoftwareStore = defineStore("software", {
       if (items !== null) this.items = items;
       if (installed !== null) this.installed = installed;
       this.loading = false;
+      // 后台预取全部软件图标（离线缓存，进度经 icon-prefetch 事件）
+      if (this.items?.length) {
+        void prefetchIcons(this.items.map((i) => i.homepage || "").filter(Boolean));
+      }
     },
   },
 });

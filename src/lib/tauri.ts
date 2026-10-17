@@ -568,3 +568,9 @@ export const renameInventory = (oldName: string, newName: string) =>
 
 /** 用系统默认方式打开路径（目录=资源管理器，文件=关联程序） */
 export const openPath = (path: string) => tryCall<null>("open_path", { path });
+
+/** 软件图标 data URL（磁盘缓存离线可用；空串=失败，前端降级首字母） */
+export const appIcon = (homepage: string) => tryCall<string>("app_icon", { homepage });
+/** 后台批量预取图标（软件库加载后调用），进度经 icon-prefetch 事件推送 */
+export const prefetchIcons = (homepages: string[]) =>
+  tryCall<null>("prefetch_icons", { homepages });

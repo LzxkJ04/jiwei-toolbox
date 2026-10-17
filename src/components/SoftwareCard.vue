@@ -54,7 +54,7 @@ function onCheck(v: boolean) {
   >
     <div class="flex items-start gap-3">
       <!-- 图标（favicon，失败降级首字母） -->
-      <SoftwareIcon :name="item.name || ''" :homepage="item.homepage" />
+      <SoftwareIcon :item="item" />
 
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">

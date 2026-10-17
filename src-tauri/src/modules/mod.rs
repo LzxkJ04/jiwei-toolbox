@@ -1,5 +1,6 @@
 //! 功能模块集合
 
+pub mod appicon;
 pub mod backup;
 pub mod cache;
 pub mod common;
