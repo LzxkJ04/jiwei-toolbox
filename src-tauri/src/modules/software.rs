@@ -228,7 +228,7 @@ fn software_list_paths() -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            // 安装后：{app}esources\softwares.json
+            // 安装后：{app} 目录下 resources 子目录
             v.push(dir.join("resources").join("softwares.json"));
             // 开发期：src-tauri/target/{debug|release}/ 与项目根的多级组合
             v.push(dir.join("..").join("resources").join("softwares.json"));
@@ -353,7 +353,8 @@ pub fn cancel_install() {
     INSTALL_CANCEL.store(true, Ordering::Relaxed);
 }
 
-fn emit_progress(app: &tauri::AppHandle, id: &str, stage: &str, pct: i64, msg: &str) {
+fn emit_progress(app: Option<&tauri::AppHandle>, id: &str, stage: &str, pct: i64, msg: &str) {
+    let Some(app) = app else { return };
     let _ = app.emit(
         "install-progress",
         serde_json::json!({ "id": id, "stage": stage, "pct": pct, "msg": msg }),
@@ -372,7 +373,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
 fn download_with_resume(
     url: &str,
     dest: &Path,
-    app: &tauri::AppHandle,
+    app: Option<&tauri::AppHandle>,
     id: &str,
     limiter: Option<&crate::taskopts::RateLimiter>,
 ) -> Result<(), String> {
@@ -474,7 +475,7 @@ fn download_stage(
     fs::create_dir_all(&dl_dir).map_err(|e| format!("创建下载目录失败: {}", e))?;
     let dest = dl_dir.join(format!("{}.exe", sw.id));
 
-    emit_progress(app, &sw.id, "download", 0, "开始下载");
+    emit_progress(Some(app), &sw.id, "download", 0, "开始下载");
     let mut dl: Result<(), String> = Err(String::new());
     for attempt in 0..=3usize {
         if attempt > 0 {
@@ -482,9 +483,9 @@ fn download_stage(
             if INSTALL_CANCEL.load(Ordering::Relaxed) {
                 break;
             }
-            emit_progress(app, &sw.id, "retry", 0, &format!("第 {} 次重试", attempt));
+            emit_progress(Some(app), &sw.id, "retry", 0, &format!("第 {} 次重试", attempt));
         }
-        dl = download_with_resume(&sw.url, &dest, app, &sw.id, limiter.as_deref());
+        dl = download_with_resume(&sw.url, &dest, Some(app), &sw.id, limiter.as_deref());
         if dl.is_ok() || INSTALL_CANCEL.load(Ordering::Relaxed) {
             break;
         }
@@ -501,21 +502,21 @@ fn download_stage(
 /// 校验（清单 sha256 非空时）+ 静默安装
 fn verify_and_install(app: &tauri::AppHandle, dirs: &crate::dirs::Dirs, sw: &Software, dest: &Path) -> Result<(), String> {
     if !sw.sha256.trim().is_empty() {
-        emit_progress(app, &sw.id, "verify", 0, "SHA256 校验中");
+        emit_progress(Some(app), &sw.id, "verify", 0, "SHA256 校验中");
         match sha256_file(dest) {
             Ok(h) if h.eq_ignore_ascii_case(sw.sha256.trim()) => {
-                emit_progress(app, &sw.id, "verify", 100, "校验通过");
+                emit_progress(Some(app), &sw.id, "verify", 100, "校验通过");
                 crate::logs::op_log(dirs, "install", "verify", &format!("{} ({}) SHA256 校验通过", sw.name, sw.id));
             }
             _ => {
-                emit_progress(app, &sw.id, "error", 0, "SHA256 校验失败");
+                emit_progress(Some(app), &sw.id, "error", 0, "SHA256 校验失败");
                 crate::logs::op_log(dirs, "install", "verify", &format!("{} ({}) SHA256 校验失败", sw.name, sw.id));
                 return Err("SHA256 校验失败".into());
             }
         }
     }
 
-    emit_progress(app, &sw.id, "install", 0, "开始静默安装");
+    emit_progress(Some(app), &sw.id, "install", 0, "开始静默安装");
     crate::logs::op_log(dirs, "install", "install", &format!("{} ({}) 开始静默安装 ({})", sw.name, sw.id, sw.silent_args));
     let status = if sw.kind.eq_ignore_ascii_case("msi") {
         std::process::Command::new("msiexec")
@@ -530,19 +531,19 @@ fn verify_and_install(app: &tauri::AppHandle, dirs: &crate::dirs::Dirs, sw: &Sof
     };
     match status {
         Ok(s) if s.success() => {
-            emit_progress(app, &sw.id, "done", 100, "安装完成");
+            emit_progress(Some(app), &sw.id, "done", 100, "安装完成");
             crate::logs::op_log(dirs, "install", "result", &format!("{} ({}) 安装成功", sw.name, sw.id));
             Ok(())
         }
         Ok(s) => {
             let reason = format!("安装程序异常退出: {:?}", s.code());
-            emit_progress(app, &sw.id, "error", 0, &reason);
+            emit_progress(Some(app), &sw.id, "error", 0, &reason);
             crate::logs::op_log(dirs, "install", "result", &format!("{} ({}) {}", sw.name, sw.id, reason));
             Err(reason)
         }
         Err(e) => {
             let reason = format!("启动安装程序失败: {}", e);
-            emit_progress(app, &sw.id, "error", 0, &reason);
+            emit_progress(Some(app), &sw.id, "error", 0, &reason);
             crate::logs::op_log(dirs, "install", "result", &format!("{} ({}) {}", sw.name, sw.id, reason));
             Err(reason)
         }
@@ -603,7 +604,7 @@ fn run_install_queue(app: tauri::AppHandle, ids: Vec<String>) {
             match list.iter().find(|s| s.id == *id) {
                 Some(sw) => pending.push((id.clone(), sw.clone())),
                 None => {
-                    emit_progress(&app, id, "error", 0, "软件清单中不存在该 id");
+                    emit_progress(Some(&app), id, "error", 0, "软件清单中不存在该 id");
                     failed.push((id.clone(), "软件清单中不存在该 id".into()));
                     done += 1;
                 }
@@ -616,7 +617,7 @@ fn run_install_queue(app: tauri::AppHandle, ids: Vec<String>) {
             // 串行：逐项完整执行
             for (id, sw) in &pending {
                 if INSTALL_CANCEL.load(Ordering::Relaxed) {
-                    emit_progress(&app, id, "skip", 0, "队列已终止");
+                    emit_progress(Some(&app), id, "skip", 0, "队列已终止");
                     break 'outer;
                 }
                 publish_queue_state(&app, true, id, done, total);
@@ -627,7 +628,7 @@ fn run_install_queue(app: tauri::AppHandle, ids: Vec<String>) {
                     }
                     Err(reason) => {
                         if INSTALL_CANCEL.load(Ordering::Relaxed) {
-                            emit_progress(&app, id, "skip", 0, "队列已终止");
+                            emit_progress(Some(&app), id, "skip", 0, "队列已终止");
                             break 'outer;
                         }
                         crate::logs::op_log(&dirs, "install", "download", &format!("{} ({}) {}（已重试 3 次）", sw.name, id, reason));
@@ -656,7 +657,7 @@ fn run_install_queue(app: tauri::AppHandle, ids: Vec<String>) {
 
             for (id, sw, res) in downloaded {
                 if INSTALL_CANCEL.load(Ordering::Relaxed) {
-                    emit_progress(&app, &id, "skip", 0, "队列已终止");
+                    emit_progress(Some(&app), &id, "skip", 0, "队列已终止");
                     break 'outer;
                 }
                 wait_if_paused();
@@ -676,10 +677,10 @@ fn run_install_queue(app: tauri::AppHandle, ids: Vec<String>) {
                     }
                     Err(reason) => {
                         if INSTALL_CANCEL.load(Ordering::Relaxed) {
-                            emit_progress(&app, &id, "skip", 0, "队列已终止");
+                            emit_progress(Some(&app), &id, "skip", 0, "队列已终止");
                             break 'outer;
                         }
-                        emit_progress(&app, &id, "error", 0, &reason);
+                        emit_progress(Some(&app), &id, "error", 0, &reason);
                         crate::logs::op_log(&dirs, "install", "download", &format!("{} ({}) {}（已重试 3 次）", sw.name, id, reason));
                         failed.push((id.clone(), reason));
                         done += 1;
@@ -812,5 +813,123 @@ mod tests {
     fn validate_empty_array_ok() {
         let list = validate_software_list("[]").expect("空数组应通过校验");
         assert!(list.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod e2e_download_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// 极简 HTTP 文件服务器（线程内跑）：支持 GET + Range（仅起点Range，206）
+    fn spawn_http_server(body: Vec<u8>) -> (String, std::sync::Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let range_hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let hits = range_hits.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut buf = vec![0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let req = String::from_utf8_lossy(&buf);
+                let lower = req.to_ascii_lowercase();
+                if req.starts_with("GET") && lower.contains("range: bytes=") {
+                    let start: u64 = req
+                        .split("ange: bytes=")
+                        .nth(1)
+                        .and_then(|s| s.split('-').next())
+                        .and_then(|s| s.trim().parse().ok())
+                        .unwrap_or(0);
+                    hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let head = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nConnection: close\r\n\r\n",
+                        body.len() - start as usize,
+                        start,
+                        body.len() - 1,
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&body[start as usize..]);
+                } else {
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&body);
+                }
+            }
+        });
+        (format!("http://{}/file.bin", addr), range_hits)
+    }
+
+    fn tmpfile(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("jw-e2e-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
+    }
+
+    #[test]
+    fn full_download_matches() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let body: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+        let (url, _) = spawn_http_server(body.clone());
+        let dest = tmpfile("full.bin");
+        let _ = std::fs::remove_file(&dest);
+        download_with_resume(&url, &dest, None, "t1", None).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), body);
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[test]
+    fn resume_from_partial() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let body: Vec<u8> = (0..80_000u32).map(|i| (i % 253) as u8).collect();
+        let (url, hits) = spawn_http_server(body.clone());
+        let dest = tmpfile("partial.bin");
+        // 预写前半部分，模拟中断
+        std::fs::write(&dest, &body[..40_000]).unwrap();
+        download_with_resume(&url, &dest, None, "t2", None).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), body);
+        assert!(hits.load(std::sync::atomic::Ordering::SeqCst) >= 1, "应发出 Range 请求");
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[test]
+    fn rate_limiter_throttles() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let body = vec![0xABu8; 16 * 1024]; // 16KB
+        let (url, _) = spawn_http_server(body);
+        let dest = tmpfile("rate.bin");
+        let _ = std::fs::remove_file(&dest);
+        let limiter = crate::taskopts::RateLimiter::new(4 * 1024); // 4KB/s
+        let t0 = std::time::Instant::now();
+        download_with_resume(&url, &dest, None, "t3", Some(&limiter)).unwrap();
+        let elapsed = t0.elapsed().as_secs_f64();
+        // 16KB @ 4KB/s 应 >= 3.5s（窗口 400B，16 块 64KB——大块走 full-window 线性等待）
+        assert!(elapsed >= 3.0, "限速未生效：{}s", elapsed);
+        assert!(elapsed < 60.0, "限速过慢：{}s", elapsed);
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[test]
+    fn cancel_aborts() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let body = vec![0x11u8; 2_000_000];
+        let (url, _) = spawn_http_server(body);
+        let dest = tmpfile("cancel.bin");
+        let _ = std::fs::remove_file(&dest);
+        INSTALL_CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+        let r = download_with_resume(&url, &dest, None, "t4", None);
+        INSTALL_CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(r.is_err());
+        let _ = std::fs::remove_file(&dest);
     }
 }
