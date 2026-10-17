@@ -863,3 +863,71 @@ pub fn inst_detect_existing() -> ExistingInstall {
     let exists = !program.trim().is_empty() || !data.trim().is_empty();
     ExistingInstall { exists, program, data, old_version }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// JSON 转义 round-trip：转义后包一层引号应是合法 JSON 字符串且还原一致
+    fn assert_roundtrip(s: &str) {
+        let escaped = json_escape_ascii(s);
+        let wrapped = format!("\"{}\"", escaped);
+        let restored: String = serde_json::from_str(&wrapped)
+            .unwrap_or_else(|e| panic!("转义结果不是合法 JSON 字符串: {e} → {escaped}"));
+        assert_eq!(restored, s);
+    }
+
+    #[test]
+    fn escape_ascii_passthrough() {
+        assert_eq!(json_escape_ascii("abc XYZ 019"), "abc XYZ 019");
+        assert_eq!(json_escape_ascii(""), "");
+    }
+
+    #[test]
+    fn escape_quote_and_backslash() {
+        assert_eq!(json_escape_ascii("a\"b"), "a\\\"b");
+        assert_eq!(json_escape_ascii("a\\b"), "a\\\\b");
+        assert_eq!(json_escape_ascii(r"C:\Program Files\App"), "C:\\\\Program Files\\\\App");
+    }
+
+    #[test]
+    fn escape_control_chars() {
+        assert_eq!(json_escape_ascii("\n"), "\\n");
+        assert_eq!(json_escape_ascii("\r"), "\\r");
+        assert_eq!(json_escape_ascii("\t"), "\\t");
+        assert_eq!(json_escape_ascii("\u{1}"), "\\u0001");
+        assert_eq!(json_escape_ascii("\u{1f}"), "\\u001f");
+    }
+
+    #[test]
+    fn escape_chinese_to_u_xxxx() {
+        // 中文目录名 → 纯 ASCII \uXXXX（与 ssPostInstall JsonEscUnicode 格式一致）
+        assert_eq!(json_escape_ascii("配置"), "\\u914d\\u7f6e");
+        assert_eq!(json_escape_ascii("极维工具箱"), "\\u6781\\u7ef4\\u5de5\\u5177\\u7bb1");
+        // 输出必须为纯 ASCII
+        let out = json_escape_ascii("极维工具箱\\配置\\dirs.json");
+        assert!(out.is_ascii());
+    }
+
+    #[test]
+    fn escape_emoji_surrogate_pair() {
+        // U+1F600 😀 → UTF-16 代理对 D83D DE00
+        assert_eq!(json_escape_ascii("\u{1f600}"), "\\ud83d\\ude00");
+        // U+10000 最低 BMP 外码位
+        assert_eq!(json_escape_ascii("\u{10000}"), "\\ud800\\udc00");
+    }
+
+    #[test]
+    fn escape_roundtrip_preserves_content() {
+        // 混合中英文、emoji、引号、反斜杠、控制字符的目录字符串
+        let cases = [
+            r"C:\Program Files\极维工具箱",
+            "D:\\数据目录\\配置\\dirs.json",
+            "C:\\emoji😀目录\"引号\"测试\\反斜杠\\",
+            "换行\n制表\t回车\r混合中 English 123",
+        ];
+        for c in cases {
+            assert_roundtrip(c);
+        }
+    }
+}

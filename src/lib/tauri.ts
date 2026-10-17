@@ -422,6 +422,8 @@ export const setLogRetention = (days: number) => tryCall<null>("set_log_retentio
 export const listLogs = () => tryCall<string[]>("list_logs");
 export const readLog = (file: string) => tryCall<string>("read_log", { file });
 export const openLogDir = () => tryCall<null>("open_log_dir");
+/** 清空日志目录（删除全部日志文件），返回删除的文件数 */
+export const clearLogs = () => tryCall<number>("clear_logs");
 
 /* ============ 引导壳（安装器 / 卸载器） ============ */
 

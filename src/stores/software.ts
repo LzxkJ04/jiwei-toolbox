@@ -7,6 +7,8 @@ export const useSoftwareStore = defineStore("software", {
     items: null as SoftwareItem[] | null,
     installed: [] as InstalledApp[],
     loading: false,
+    /** 软件库勾选状态（全局：软件库 / 备份页加载清单等跨页联动） */
+    checked: new Set<string>() as Set<string>,
   }),
   getters: {
     /** 授权标签：清单 license 字段优先，缺失时按 notes/url 关键词推断并优雅降级 */
@@ -49,6 +51,22 @@ export const useSoftwareStore = defineStore("software", {
     },
   },
   actions: {
+    /** 勾选 / 取消勾选单个软件（整体替换 Set 确保响应式触发） */
+    setChecked(id: string, v: boolean) {
+      const next = new Set(this.checked);
+      if (v) next.add(id);
+      else next.delete(id);
+      this.checked = next;
+    },
+    /** 批量勾选（不清除已有勾选） */
+    addChecked(ids: string[]) {
+      const next = new Set(this.checked);
+      ids.forEach((id) => next.add(id));
+      this.checked = next;
+    },
+    clearChecked() {
+      this.checked = new Set<string>();
+    },
     async load() {
       if (this.loading) return;
       this.loading = true;

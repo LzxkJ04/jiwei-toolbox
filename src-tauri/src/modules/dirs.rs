@@ -68,6 +68,41 @@ fn dirs_json_candidates() -> Vec<PathBuf> {
     ]
 }
 
+/// 解析 dirs.json 文本（utf-8-sig 兼容）为 Dirs：
+/// - data 缺失 → 兼容旧格式：取旧 config 的父目录；仍为空则回退 defaults.data
+/// - program 等字段缺失/为空 → 取 data 派生值
+/// 解析失败返回 None（调用方回退默认值）
+fn parse_dirs_text(text: &str, defaults: &Dirs) -> Option<Dirs> {
+    let text = crate::common::strip_bom(text.to_string());
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    // data 缺失 → 兼容旧格式：取旧 config 的父目录
+    let data = pick(&v, &["data", "dataDir"], "");
+    let data = if data.trim().is_empty() {
+        let old_cfg = pick(&v, &["config", "configDir", "configdir"], "");
+        let parent = Path::new(&old_cfg)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if parent.trim().is_empty() {
+            defaults.data.clone()
+        } else {
+            parent
+        }
+    } else {
+        data
+    };
+    let derived = derive_from_data(Path::new(&data));
+    // program 保留独立存储；旧格式下若 data 派生失败且旧字段存在，尊重旧字段
+    Some(Dirs {
+        program: pick(&v, &["program", "programDir", "programdir"], &derived.program),
+        data: derived.data,
+        config: derived.config,
+        backup: derived.backup,
+        cache: derived.cache,
+        log: derived.log,
+    })
+}
+
 /// 加载目录配置：读 dirs.json（utf-8-sig），缺失/缺字段则按双路径模型派生；
 /// 自动创建全部目录并写回首个候选位置（存在旧文件则原地更新）
 pub fn load_dirs() -> Dirs {
@@ -81,38 +116,8 @@ pub fn load_dirs() -> Dirs {
 
     let dirs = match fs::read(&json_path) {
         Ok(bytes) => {
-            let text = crate::common::strip_bom(String::from_utf8_lossy(&bytes).into_owned());
-            match serde_json::from_str::<serde_json::Value>(&text) {
-                Ok(v) => {
-                    // data 缺失 → 兼容旧格式：取旧 config 的父目录
-                    let data = pick(&v, &["data", "dataDir"], "");
-                    let data = if data.trim().is_empty() {
-                        let old_cfg = pick(&v, &["config", "configDir", "configdir"], "");
-                        let parent = Path::new(&old_cfg)
-                            .parent()
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-                        if parent.trim().is_empty() {
-                            defaults.data.clone()
-                        } else {
-                            parent
-                        }
-                    } else {
-                        data
-                    };
-                    let derived = derive_from_data(Path::new(&data));
-                    // program 保留独立存储；旧格式下若 data 派生失败且旧字段存在，尊重旧字段
-                    Dirs {
-                        program: pick(&v, &["program", "programDir", "programdir"], &derived.program),
-                        data: derived.data,
-                        config: derived.config,
-                        backup: derived.backup,
-                        cache: derived.cache,
-                        log: derived.log,
-                    }
-                }
-                Err(_) => defaults.clone(),
-            }
+            parse_dirs_text(&String::from_utf8_lossy(&bytes), &defaults)
+                .unwrap_or_else(|| defaults.clone())
         }
         Err(_) => defaults.clone(),
     };
@@ -287,4 +292,122 @@ pub fn read_legacy_dirs() -> Option<Dirs> {
         dirs.program = r"C:\Program Files\极维工具箱".to_string();
     }
     Some(dirs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试用默认值（避免依赖 %LOCALAPPDATA% 环境变量）
+    fn test_defaults() -> Dirs {
+        derive_from_data(Path::new(r"D:\ TestData\极维工具箱"))
+    }
+
+    // ---- dirs.json 解析（utf-8-sig / 无 BOM / 旧格式 / 缺字段） ----
+
+    #[test]
+    fn parse_with_bom() {
+        // 带 UTF-8 BOM 的 utf-8-sig 文件应正常解析（JSON 内路径为转义后的反斜杠）
+        let json = "\u{feff}{\"program\":\"C:\\\\App\",\"data\":\"D:\\\\Data\"}";
+        let d = parse_dirs_text(json, &test_defaults()).expect("BOM JSON 应可解析");
+        assert_eq!(d.program, r"C:\App");
+        assert_eq!(d.data, r"D:\Data");
+        assert_eq!(d.config, r"D:\Data\配置");
+        assert_eq!(d.backup, r"D:\Data\备份导出");
+        assert_eq!(d.cache, r"D:\Data\缓存");
+        assert_eq!(d.log, r"D:\Data\缓存\logs");
+    }
+
+    #[test]
+    fn parse_without_bom() {
+        let json = r#"{"program":"C:\\App","data":"D:\\Data"}"#;
+        let d = parse_dirs_text(json, &test_defaults()).expect("无 BOM JSON 应可解析");
+        assert_eq!(d.program, r"C:\App");
+        assert_eq!(d.data, r"D:\Data");
+    }
+
+    #[test]
+    fn parse_legacy_format_no_data_field() {
+        // 旧格式：无 data 字段，data 取旧 config 的父目录
+        let json = r#"{"config":"E:\\OldDir\\配置","program":"E:\\OldDir"}"#;
+        let d = parse_dirs_text(json, &test_defaults()).expect("旧格式应可解析");
+        assert_eq!(d.data, r"E:\OldDir");
+        assert_eq!(d.config, r"E:\OldDir\配置");
+        assert_eq!(d.program, r"E:\OldDir");
+    }
+
+    #[test]
+    fn parse_legacy_format_empty_config_falls_back_to_defaults() {
+        // 旧格式且 config 也为空 → data 回退默认值
+        let json = r#"{}"#;
+        let defaults = test_defaults();
+        let d = parse_dirs_text(json, &defaults).expect("空对象应可解析");
+        assert_eq!(d.data, defaults.data);
+        assert_eq!(d.config, defaults.config);
+    }
+
+    #[test]
+    fn parse_missing_fields_use_derived_defaults() {
+        // 只有 data：program 回退派生默认值，子目录全部由 data 派生
+        let json = r#"{"data":"D:\\Data"}"#;
+        let d = parse_dirs_text(json, &test_defaults()).unwrap();
+        assert_eq!(d.program, r"C:\Program Files\极维工具箱");
+        assert_eq!(d.cache, r"D:\Data\缓存");
+    }
+
+    #[test]
+    fn parse_invalid_json_returns_none() {
+        assert!(parse_dirs_text("not json {", &test_defaults()).is_none());
+    }
+
+    #[test]
+    fn parse_ignores_empty_string_fields() {
+        // 字段为空串时视同缺失
+        let json = r#"{"program":"","data":"  ","config":"E:\\OldDir\\配置"}"#;
+        let d = parse_dirs_text(json, &test_defaults()).unwrap();
+        // data 为空白 → 旧格式回退：config 父目录
+        assert_eq!(d.data, r"E:\OldDir");
+        assert_eq!(d.program, r"C:\Program Files\极维工具箱");
+    }
+
+    // ---- 路径校验（set_dirs 前置校验） ----
+
+    #[test]
+    fn illegal_chars_detection() {
+        assert!(has_illegal_chars(r"C:\a<b"));
+        assert!(has_illegal_chars(r"C:\a|b"));
+        assert!(has_illegal_chars(r"C:\a?b*"));
+        // 盘符冒号合法，第二个冒号非法
+        assert!(!has_illegal_chars(r"C:\Windows"));
+        assert!(has_illegal_chars(r"C:\a:b"));
+        assert!(has_illegal_chars(r":foo"));
+    }
+
+    #[test]
+    fn ancestor_or_self_detection() {
+        assert!(is_ancestor_or_self(r"C:\A", r"C:\A"));
+        assert!(is_ancestor_or_self(r"C:\A", r"C:\A\B"));
+        // 尾部斜杠与大小写归一化
+        assert!(is_ancestor_or_self(r"c:\a\", r"C:\A\B"));
+        // 仅前缀相同但非目录边界不算祖先
+        assert!(!is_ancestor_or_self(r"C:\AB", r"C:\ABC"));
+        assert!(!is_ancestor_or_self(r"C:\A", r"D:\A\B"));
+    }
+
+    #[test]
+    fn validate_dir_pair_rejects_bad_input() {
+        // 空值
+        assert!(validate_dir_pair("", r"C:\Data").is_err());
+        assert!(validate_dir_pair(r"C:\Program", "  ").is_err());
+        // 非绝对路径
+        assert!(validate_dir_pair(r"relative\path", r"C:\Data").is_err());
+        // 非法字符
+        assert!(validate_dir_pair(r"C:\Pro*gram", r"C:\Data").is_err());
+        // 互为父子 / 相同
+        assert!(validate_dir_pair(r"C:\Same", r"C:\Same").is_err());
+        assert!(validate_dir_pair(r"C:\Parent", r"C:\Parent\Data").is_err());
+        assert!(validate_dir_pair(r"C:\Parent\Data", r"C:\Parent").is_err());
+        // 合法组合
+        assert!(validate_dir_pair(r"C:\Program Files\极维工具箱", r"D:\Data").is_ok());
+    }
 }

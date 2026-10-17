@@ -204,4 +204,52 @@ mod tests {
         assert_eq!(list[0].date, "03/01/2024");
         assert_eq!(list[0].version, "11.2.5.1");
     }
+
+    #[test]
+    fn parse_multiple_records() {
+        // 两条记录以空行分隔，末条无尾随空行也应被 flush
+        let text = "Published Name:     oem1.inf\r\nOriginal Name:      a.inf\r\nProvider Name:      A Corp\r\nDriver Version:     01/02/2023 1.0.0.0\r\n\r\nPublished Name:     oem2.inf\r\nOriginal Name:      b.inf\r\nProvider Name:      B Corp\r\nDriver Version:     04/05/2026 2.0.0.0\r\n";
+        let list = parse_drivers(text);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].inf_name, "oem1.inf");
+        assert_eq!(list[1].inf_name, "oem2.inf");
+        assert_eq!(list[1].version, "2.0.0.0");
+    }
+
+    #[test]
+    fn parse_missing_original_name_defaults_unknown() {
+        // 缺「原始名称」字段 → device_name 兜底 "未知"
+        let text = "Published Name:     oem7.inf\r\nProvider Name:      Intel\r\nDriver Version:     06/07/2025 9.9.9.9\r\n";
+        let list = parse_drivers(text);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].device_name, "未知");
+        assert_eq!(list[0].inf_name, "oem7.inf");
+    }
+
+    #[test]
+    fn parse_old_pnputil_version_without_date() {
+        // 旧版 pnputil：驱动程序版本行仅有版本号、无日期
+        let text = "发布名称:     oem5.inf\r\n原始名称:     legacy.inf\r\n提供程序名称: Foo\r\n驱动程序版本:     12.34.56.78\r\n";
+        let list = parse_drivers(text);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].date, "");
+        assert_eq!(list[0].version, "12.34.56.78");
+    }
+
+    #[test]
+    fn parse_empty_and_noise_lines() {
+        // 无标签的标题行与空输入不产生记录
+        assert!(parse_drivers("").is_empty());
+        assert!(parse_drivers("Microsoft PnP Utility\r\n\r\n").is_empty());
+    }
+
+    #[test]
+    fn csv_field_escaping() {
+        // 普通值不加引号
+        assert_eq!(csv_field("plain"), "plain");
+        // 含逗号/引号/换行加引号，内部引号翻倍
+        assert_eq!(csv_field("a,b"), "\"a,b\"");
+        assert_eq!(csv_field("a\"b"), "\"a\"\"b\"");
+        assert_eq!(csv_field("a\nb"), "\"a\nb\"");
+    }
 }

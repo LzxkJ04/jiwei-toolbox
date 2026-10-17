@@ -8,6 +8,7 @@ import SoftwareDetailDialog from "../components/SoftwareDetailDialog.vue";
 import type { SoftwareItem } from "../lib/tauri";
 import { useSoftwareStore } from "../stores/software";
 import { useFavoritesStore } from "../stores/favorites";
+import { toast } from "../lib/toast";
 
 const store = useSoftwareStore();
 const favorites = useFavoritesStore();
@@ -22,6 +23,13 @@ const favItems = computed(() =>
 function openDetail(item: SoftwareItem) {
   detailItem.value = item;
   detailOpen.value = true;
+}
+
+/** 卡片上快捷取消收藏（即时移除） */
+function unfav(item: SoftwareItem) {
+  void favorites.toggle(item.id).then((added) => {
+    toast(added ? "已加入收藏" : "已取消收藏", "success");
+  });
 }
 </script>
 
@@ -44,7 +52,9 @@ function openDetail(item: SoftwareItem) {
         v-for="item in favItems"
         :key="item.id"
         :item="item"
+        :fav="favorites.isFavorite(item.id)"
         @detail="openDetail(item)"
+        @toggle-fav="unfav(item)"
       />
     </div>
 

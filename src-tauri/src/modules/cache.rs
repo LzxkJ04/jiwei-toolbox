@@ -74,8 +74,8 @@ pub fn scan_junk() -> Vec<JunkItem> {
             let mut size = 0u64;
             if let Ok(entries) = std::fs::read_dir(&explorer) {
                 for e in entries.flatten() {
-                    let name = e.file_name().to_string_lossy().to_lowercase();
-                    if name.starts_with("thumbcache_") || name.starts_with("iconcache_") {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    if is_thumbcache_file(&name) {
                         size += e.metadata().map(|m| m.len()).unwrap_or(0);
                     }
                 }
@@ -192,16 +192,29 @@ pub fn cache_files() -> Vec<CacheFile> {
     out
 }
 
+/// 缩略图/图标缓存文件名判断（thumbcache_*.db / iconcache_*.db，大小写不敏感）
+fn is_thumbcache_file(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.starts_with("thumbcache_") || lower.starts_with("iconcache_")
+}
+
+/// 缓存文件名合法性校验：必须是纯文件名
+/// （禁止空名、路径分隔符 \ / 与 ".."，防路径穿越到 cache 目录之外）
+fn validate_cache_names(names: &[String]) -> Result<(), String> {
+    for n in names {
+        if n.trim().is_empty() || n.contains('\\') || n.contains('/') || n.contains("..") {
+            return Err(format!("非法文件名: {}", n));
+        }
+    }
+    Ok(())
+}
+
 /// 按文件名精确删除缓存文件：names 必须是纯文件名（禁止路径分隔符与 ".."），
 /// 只在 cache\downloads、cache\temp、日志目录、cache 根内匹配删除。
 /// 返回实际删除的文件数。
 #[tauri::command]
 pub fn cache_delete(names: Vec<String>) -> Result<usize, String> {
-    for n in &names {
-        if n.trim().is_empty() || n.contains('\\') || n.contains('/') || n.contains("..") {
-            return Err(format!("非法文件名: {}", n));
-        }
-    }
+    validate_cache_names(&names)?;
     let dirs = crate::dirs::load_dirs();
     let cache = Path::new(&dirs.cache);
     let search_dirs = [
@@ -222,4 +235,57 @@ pub fn cache_delete(names: Vec<String>) -> Result<usize, String> {
     }
     crate::logs::op_log(&dirs, "cache", "cache_delete", &format!("精细删除 {} 个缓存文件", deleted));
     Ok(deleted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- 路径穿越防护（cache_delete 前置校验） ----
+
+    #[test]
+    fn validate_rejects_path_traversal() {
+        // ".." 与 "..\"、"../" 穿越必须拒绝
+        assert!(validate_cache_names(&["..\\evil.exe".to_string()]).is_err());
+        assert!(validate_cache_names(&["../evil.exe".to_string()]).is_err());
+        assert!(validate_cache_names(&["a..b.txt".to_string()]).is_err());
+        assert!(validate_cache_names(&["..".to_string()]).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_separators_and_empty() {
+        // 任何路径分隔符都拒绝（只允许纯文件名）
+        assert!(validate_cache_names(&[r"sub\file.txt".to_string()]).is_err());
+        assert!(validate_cache_names(&["sub/file.txt".to_string()]).is_err());
+        assert!(validate_cache_names(&[r"C:\Windows\notepad.exe".to_string()]).is_err());
+        // 空名与纯空白拒绝
+        assert!(validate_cache_names(&[String::new()]).is_err());
+        assert!(validate_cache_names(&["   ".to_string()]).is_err());
+        // 空列表合法（删除 0 个）
+        assert!(validate_cache_names(&[]).is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_plain_filenames() {
+        assert!(validate_cache_names(&["softwares.json".to_string(), "setup.exe".to_string()]).is_ok());
+        // 中文文件名合法
+        assert!(validate_cache_names(&["配置备份.zip".to_string()]).is_ok());
+    }
+
+    // ---- kind 分类判断 ----
+
+    #[test]
+    fn thumbcache_kind_detection() {
+        // 标准缩略图/图标缓存文件名
+        assert!(is_thumbcache_file("thumbcache_1024.db"));
+        assert!(is_thumbcache_file("iconcache_256.db"));
+        // 大小写不敏感
+        assert!(is_thumbcache_file("ThumbCache_16.db"));
+        assert!(is_thumbcache_file("ICONCACHE_idx.db"));
+        // 非缓存文件
+        assert!(!is_thumbcache_file("thumbcache.db"));
+        assert!(!is_thumbcache_file("mythumbcache_1.db"));
+        assert!(!is_thumbcache_file("shell.ico"));
+        assert!(!is_thumbcache_file(""));
+    }
 }

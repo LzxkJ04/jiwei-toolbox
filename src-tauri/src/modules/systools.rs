@@ -141,6 +141,22 @@ pub struct ServiceInfo {
     pub start_type: String,
 }
 
+/// 解析 Get-Service 的 ConvertTo-Json 输出为服务列表：
+/// - 单结果时 ConvertTo-Json 输出对象（非数组）→ 包装为单元素数组
+/// - 空数组时 PowerShell 输出空串 → 视为空列表
+/// - 缺字段的条目被丢弃
+fn parse_services_output(text: &str) -> Result<Vec<ServiceInfo>, String> {
+    if text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let arr = match v {
+        serde_json::Value::Array(a) => a,
+        other => vec![other],
+    };
+    Ok(arr.into_iter().filter_map(|x| serde_json::from_value(x).ok()).collect())
+}
+
 /// 列出全部 Windows 服务（PowerShell Get-Service）
 #[tauri::command]
 pub fn list_services() -> Result<Vec<ServiceInfo>, String> {
@@ -153,12 +169,7 @@ pub fn list_services() -> Result<Vec<ServiceInfo>, String> {
         return Err(String::from_utf8_lossy(&out.stderr).into_owned());
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    let arr = match v {
-        serde_json::Value::Array(a) => a,
-        other => vec![other],
-    };
-    Ok(arr.into_iter().filter_map(|x| serde_json::from_value(x).ok()).collect())
+    parse_services_output(&text)
 }
 
 /// 服务操作：start / stop / auto / manual / disabled（sc 命令，需管理员）
@@ -506,4 +517,55 @@ pub fn remove_uwp(package: String) -> Result<(), String> {
     };
     crate::logs::op_log(&dirs, "uwp", "remove", &format!("移除 UWP 包 {}: {}", package, outcome));
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_services_array_output() {
+        // PowerShell ConvertTo-Json 正多数组输出
+        let text = r#"[{"name":"wuauserv","display":"Windows Update","status":"Running","start_type":"Manual"},{"name":"Spooler","display":"Print Spooler","status":"Stopped","start_type":"Auto"}]"#;
+        let list = parse_services_output(text).expect("数组输出应可解析");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].name, "wuauserv");
+        assert_eq!(list[0].display, "Windows Update");
+        assert_eq!(list[0].status, "Running");
+        assert_eq!(list[0].start_type, "Manual");
+        assert_eq!(list[1].name, "Spooler");
+        assert_eq!(list[1].status, "Stopped");
+    }
+
+    #[test]
+    fn parse_services_single_object_output() {
+        // 单结果时 ConvertTo-Json 输出对象（非数组）
+        let text = r#"{"name":"BITS","display":"Background Intelligent Transfer Service","status":"Running","start_type":"Delayed"}"#;
+        let list = parse_services_output(text).expect("单对象输出应可解析");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "BITS");
+    }
+
+    #[test]
+    fn parse_services_empty_output() {
+        // PowerShell 对空数组 @() 输出空串 → 应返回空列表而非报错
+        assert!(parse_services_output("").unwrap().is_empty());
+        assert!(parse_services_output("   \r\n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_services_invalid_json_is_err() {
+        assert!(parse_services_output("not json").is_err());
+        assert!(parse_services_output("{\"truncated\":").is_err());
+    }
+
+    #[test]
+    fn parse_services_drops_items_with_missing_fields() {
+        // 缺字段（如缺 status）的条目被丢弃，其余保留
+        let text = r#"[{"name":"ok1","display":"A","status":"Running","start_type":"Auto"},{"name":"bad","display":"B"},{"name":"ok2","display":"C","status":"Stopped","start_type":"Disabled"}]"#;
+        let list = parse_services_output(text).unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].name, "ok1");
+        assert_eq!(list[1].name, "ok2");
+    }
 }

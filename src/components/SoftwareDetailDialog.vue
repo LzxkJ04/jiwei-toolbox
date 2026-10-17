@@ -84,6 +84,11 @@ function addToQueue() {
   const n = tasks.addFromSoftware([props.item]);
   toast(n > 0 ? "已加入任务队列" : "该软件已在任务队列中", n > 0 ? "success" : "info");
 }
+
+// TODO(后端化): 后端提供 open_path / 启动进程命令后，改为直接以 install_location 启动软件
+function openSoftware() {
+  toast("暂不支持应用内直接启动，请通过开始菜单或桌面快捷方式打开该软件", "info");
+}
 </script>
 
 <template>
@@ -210,7 +215,12 @@ function addToQueue() {
 
           <!-- 注册表信息 -->
           <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3.5">
-            <h4 class="mb-2 text-sm font-semibold">注册表信息</h4>
+            <h4 class="mb-2 flex items-center justify-between gap-2 text-sm font-semibold">
+              <span>注册表信息</span>
+              <Button v-if="installedApp" variant="ghost" size="sm" title="打开该软件" @click="openSoftware">
+                打开软件
+              </Button>
+            </h4>
             <template v-if="installedApp">
               <p class="flex items-start gap-1.5 text-xs">
                 <CheckCircle2 class="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#30a46c]" />

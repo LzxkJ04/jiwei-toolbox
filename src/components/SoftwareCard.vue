@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { Box, CheckCircle2, ChevronRight, CircleDashed, XCircle } from "lucide-vue-next";
+import { Box, CheckCircle2, ChevronRight, CircleDashed, Star, XCircle } from "lucide-vue-next";
 import Checkbox from "./ui/Checkbox.vue";
 import Badge from "./ui/Badge.vue";
 import type { SoftwareItem } from "../lib/tauri";
@@ -9,11 +9,14 @@ import { useSoftwareStore } from "../stores/software";
 const props = defineProps<{
   item: SoftwareItem;
   checked?: boolean;
+  /** 传入（true/false）时显示收藏角标按钮；不传则隐藏 */
+  fav?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "update:checked", v: boolean): void;
   (e: "detail"): void;
+  (e: "toggle-fav"): void;
 }>();
 
 const store = useSoftwareStore();
@@ -63,6 +66,15 @@ function onCheck(v: boolean) {
           <span class="truncate font-semibold">{{ item.name || "未知软件" }}</span>
           <!-- 授权标签 -->
           <Badge :tone="licenseTone">{{ licenseLabel }}</Badge>
+          <!-- 收藏角标（收藏页快捷取消收藏） -->
+          <button
+            v-if="props.fav !== undefined"
+            class="shrink-0 cursor-pointer text-[var(--primary)] transition-transform hover:scale-110"
+            :title="props.fav ? '取消收藏' : '加入收藏'"
+            @click.stop="emit('toggle-fav')"
+          >
+            <Star class="h-4 w-4" :class="props.fav && 'fill-[var(--primary)]'" />
+          </button>
           <!-- 状态标识 -->
           <Badge :tone="statusInfo.tone" class="ml-auto">
             <component :is="statusInfo.icon" class="h-3 w-3" />

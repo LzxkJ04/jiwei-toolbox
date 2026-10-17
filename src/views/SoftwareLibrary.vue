@@ -22,7 +22,8 @@ const tasks = useTasksStore();
 const search = ref("");
 const filter = ref("all");
 const category = ref("全部");
-const checked = ref(new Set<string>());
+/** 勾选状态存于 software store（备份页加载清单可跨页联动） */
+const checked = computed(() => store.checked);
 const detailItem = ref<SoftwareItem | null>(null);
 const detailOpen = ref(false);
 
@@ -50,10 +51,7 @@ const visible = computed(() => {
 });
 
 function setChecked(item: SoftwareItem, v: boolean) {
-  const next = new Set(checked.value);
-  if (v) next.add(item.id);
-  else next.delete(item.id);
-  checked.value = next;
+  store.setChecked(item.id, v);
 }
 
 const allChecked = computed(
@@ -61,8 +59,8 @@ const allChecked = computed(
 );
 
 function toggleSelectAll() {
-  if (allChecked.value) checked.value = new Set();
-  else checked.value = new Set(visible.value.map((i) => i.id));
+  if (allChecked.value) store.clearChecked();
+  else store.addChecked(visible.value.map((i) => i.id));
 }
 
 function openDetail(item: SoftwareItem) {
@@ -113,7 +111,7 @@ function importList(e: Event) {
         toast("清单中没有匹配到本地软件", "error");
         return;
       }
-      checked.value = new Set([...checked.value, ...matched]);
+      store.addChecked([...checked.value, ...matched]);
       toast(`已导入并勾选 ${matched.size} 个软件`, "success");
     } catch {
       toast("清单文件解析失败", "error");

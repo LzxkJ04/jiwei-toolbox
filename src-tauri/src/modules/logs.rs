@@ -4,6 +4,11 @@ use crate::dirs::Dirs;
 use std::io::Write;
 use std::path::Path;
 
+/// 格式化一条操作日志行：`[HH:MM:SS] [module] action : detail`
+fn op_log_line(now: chrono::DateTime<chrono::Local>, module: &str, action: &str, detail: &str) -> String {
+    format!("[{}] [{}] {} : {}", now.format("%H:%M:%S"), module, action, detail)
+}
+
 /// 追加一条操作日志：`<log 目录>\ops-YYYYMMDD.log`（UTF-8，格式 `[HH:MM:SS] [module] action : detail`）
 pub fn op_log(dirs: &Dirs, module: &str, action: &str, detail: &str) {
     let now = chrono::Local::now();
@@ -12,7 +17,7 @@ pub fn op_log(dirs: &Dirs, module: &str, action: &str, detail: &str) {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(f, "[{}] [{}] {} : {}", now.format("%H:%M:%S"), module, action, detail);
+        let _ = writeln!(f, "{}", op_log_line(now, module, action, detail));
     }
 }
 
@@ -103,6 +108,19 @@ pub fn set_log_retention(days: u32) -> Result<(), String> {
     crate::common::write_setting_raw("log_retention", serde_json::json!(days))
 }
 
+/// 保留天数文件筛选判断：mtime 距 now 超过 days*86400 秒视为过期。
+/// days=0（关闭）恒为 false；mtime 在未来（时钟回拨）不删除。
+fn log_expired(modified: std::time::SystemTime, now: std::time::SystemTime, days: u32) -> bool {
+    if days == 0 {
+        return false;
+    }
+    let max_age = std::time::Duration::from_secs(days as u64 * 86400);
+    now.duration_since(modified)
+        .ok()
+        .map(|age| age >= max_age)
+        .unwrap_or(false)
+}
+
 /// 按保留天数清理过期日志：log 目录下 mtime 超过 days*86400 秒的文件删除
 /// 返回删除的文件数（days=0 直接返回 0）
 pub fn cleanup_old_logs(days: u32) -> usize {
@@ -110,7 +128,7 @@ pub fn cleanup_old_logs(days: u32) -> usize {
         return 0;
     }
     let dirs = crate::dirs::load_dirs();
-    let max_age = std::time::Duration::from_secs(days as u64 * 86400);
+    let now = std::time::SystemTime::now();
     let mut count = 0usize;
     if let Ok(entries) = std::fs::read_dir(&dirs.log) {
         for e in entries.flatten() {
@@ -121,9 +139,7 @@ pub fn cleanup_old_logs(days: u32) -> usize {
             let expired = e
                 .metadata()
                 .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.elapsed().ok())
-                .map(|age| age >= max_age)
+                .map(|t| log_expired(t, now, days))
                 .unwrap_or(false);
             if expired && std::fs::remove_file(&p).is_ok() {
                 count += 1;
@@ -141,4 +157,44 @@ pub fn startup_retention() {
     std::thread::spawn(|| {
         cleanup_old_logs(log_retention_days());
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn op_log_line_format() {
+        let t = chrono::Local.with_ymd_and_hms(2026, 10, 18, 9, 5, 3).unwrap();
+        assert_eq!(op_log_line(t, "dirs", "set_dirs", "program=A data=B"), "[09:05:03] [dirs] set_dirs : program=A data=B");
+        // detail 为空时保留尾部 " : "
+        assert_eq!(op_log_line(t, "install", "tasks_done", ""), "[09:05:03] [install] tasks_done : ");
+    }
+
+    #[test]
+    fn log_expired_by_retention_days() {
+        let now = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        // 恰好 30 天前 → 过期（>=）
+        let old = now - std::time::Duration::from_secs(30 * 86400);
+        assert!(log_expired(old, now, 30));
+        // 29 天前 → 保留
+        let fresh = now - std::time::Duration::from_secs(29 * 86400);
+        assert!(!log_expired(fresh, now, 30));
+        // 7 天保留：8 天前过期、6 天前保留
+        assert!(log_expired(now - std::time::Duration::from_secs(8 * 86400), now, 7));
+        assert!(!log_expired(now - std::time::Duration::from_secs(6 * 86400), now, 7));
+        // 刚创建的文件不过期
+        assert!(!log_expired(now, now, 7));
+    }
+
+    #[test]
+    fn log_expired_disabled_or_future_mtime() {
+        let now = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        // days=0（策略关闭）恒不删
+        assert!(!log_expired(now - std::time::Duration::from_secs(365 * 86400), now, 0));
+        // mtime 在未来（时钟回拨）不删
+        let future = now + std::time::Duration::from_secs(86400);
+        assert!(!log_expired(future, now, 7));
+    }
 }

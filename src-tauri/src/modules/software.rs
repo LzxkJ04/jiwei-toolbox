@@ -266,34 +266,15 @@ pub struct UpdateListResult {
     pub source: String,
 }
 
-/// 从远程源拉取软件清单 → 校验结构 → 写入缓存 softwares.json
-/// （清单校验失败 / 网络失败 / 404 均返回 Err，本地清单仍可用）
-#[tauri::command]
-pub fn update_software_list() -> Result<UpdateListResult, String> {
-    let mut url = crate::common::get_setting("software_source_url".into());
-    if url.trim().is_empty() {
-        url = DEFAULT_SOFTWARE_SOURCE.into();
-    }
-    let dirs = crate::dirs::load_dirs();
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(60))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| format!("网络客户端初始化失败: {}", e))?;
-    let resp = client
-        .get(&url)
-        .send()
-        .map_err(|e| format!("网络请求失败: {}", e))?;
-    if !resp.status().is_success() {
-        // 404 等非 2xx 一律视为"源未就绪"
-        return Err(format!("软件源未就绪: HTTP {}", resp.status()));
-    }
-    let text = crate::common::strip_bom(resp.text().map_err(|e| format!("读取响应失败: {}", e))?);
+/// 校验清单 JSON 文本并补齐可选字段，返回软件列表：
+/// - 顶层必须是 JSON 数组
+/// - 每条必须有非空 id / name / url
+/// - 可选字段缺失时补默认值，保证结果可被 list_software 解析
+fn validate_software_list(text: &str) -> Result<Vec<Software>, String> {
+    let text = crate::common::strip_bom(text.to_string());
     let raw: Vec<serde_json::Value> = serde_json::from_str(&text)
         .map_err(|e| format!("清单不是合法 JSON 数组: {}", e))?;
 
-    // 结构校验 + 补齐可选字段，保证缓存清单可被 list_software 解析
     let mut list: Vec<Software> = Vec::with_capacity(raw.len());
     for (i, mut item) in raw.into_iter().enumerate() {
         for key in ["id", "name", "url"] {
@@ -320,6 +301,34 @@ pub fn update_software_list() -> Result<UpdateListResult, String> {
             .map_err(|e| format!("清单第 {} 条结构无效: {}", i + 1, e))?;
         list.push(sw);
     }
+    Ok(list)
+}
+
+/// 从远程源拉取软件清单 → 校验结构 → 写入缓存 softwares.json
+/// （清单校验失败 / 网络失败 / 404 均返回 Err，本地清单仍可用）
+#[tauri::command]
+pub fn update_software_list() -> Result<UpdateListResult, String> {
+    let mut url = crate::common::get_setting("software_source_url".into());
+    if url.trim().is_empty() {
+        url = DEFAULT_SOFTWARE_SOURCE.into();
+    }
+    let dirs = crate::dirs::load_dirs();
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| format!("网络客户端初始化失败: {}", e))?;
+    let resp = client
+        .get(&url)
+        .send()
+        .map_err(|e| format!("网络请求失败: {}", e))?;
+    if !resp.status().is_success() {
+        // 404 等非 2xx 一律视为"源未就绪"
+        return Err(format!("软件源未就绪: HTTP {}", resp.status()));
+    }
+    let text = resp.text().map_err(|e| format!("读取响应失败: {}", e))?;
+    let list = validate_software_list(&text)?;
 
     let dest = PathBuf::from(&dirs.cache).join("softwares.json");
     if let Some(parent) = dest.parent() {
@@ -716,4 +725,85 @@ pub async fn queue_install(app: tauri::AppHandle, ids: Vec<String>) {
 #[tauri::command]
 pub async fn install_batch(app: tauri::AppHandle, ids: Vec<String>) {
     spawn_task_queue(app, ids);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_minimal_list_fills_defaults() {
+        // 仅必填字段：可选字段补默认值后应可完整解析
+        let text = r#"[{"id":"app1","name":"应用一","url":"https://example.com/a.exe"}]"#;
+        let list = validate_software_list(text).expect("最小清单应通过校验");
+        assert_eq!(list.len(), 1);
+        let sw = &list[0];
+        assert_eq!(sw.id, "app1");
+        assert_eq!(sw.name, "应用一");
+        assert_eq!(sw.category, "未分类");
+        assert_eq!(sw.kind, "exe");
+        assert_eq!(sw.license, "free");
+        assert_eq!(sw.size_mb, 0.0);
+        assert!(sw.changelog.is_empty());
+        assert!(sw.depends.is_empty());
+    }
+
+    #[test]
+    fn validate_full_list() {
+        // camelCase（silentArgs）与 snake_case 混用字段均按 serde rename 规则解析
+        let text = concat!(
+            r#"[{"id":"msi1","name":"MSI 包","category":"开发","url":"https://e.com/a.msi","#,
+            r#""sha256":"deadbeef","silentArgs":"/qn","type":"msi","size_mb":120.5,"license":"open"}]"#
+        );
+        let list = validate_software_list(text).expect("完整清单应通过校验");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].kind, "msi");
+        assert_eq!(list[0].silent_args, "/qn");
+        assert_eq!(list[0].sha256, "deadbeef");
+        assert!((list[0].size_mb - 120.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn validate_missing_required_field_is_err() {
+        // 缺 id / name / url 分别报错，且错误信息指明序号与字段名
+        for (json, key) in [
+            (r#"[{"name":"a","url":"u"}]"#, "id"),
+            (r#"[{"id":"x","url":"u"}]"#, "name"),
+            (r#"[{"id":"x","name":"a"}]"#, "url"),
+        ] {
+            let err = validate_software_list(json).expect_err("缺必填字段应报错");
+            assert!(err.contains(&format!("缺少必填字段: {}", key)), "错误信息应含字段名: {err}");
+        }
+        // 空串必填字段视同缺失
+        let err = validate_software_list(r#"[{"id":"  ","name":"a","url":"u"}]"#).unwrap_err();
+        assert!(err.contains("id"));
+    }
+
+    #[test]
+    fn validate_non_array_is_err() {
+        // 顶层不是数组
+        assert!(validate_software_list(r#"{"id":"x"}"#).is_err());
+        assert!(validate_software_list("null").is_err());
+        assert!(validate_software_list("").is_err());
+    }
+
+    #[test]
+    fn validate_invalid_json_is_err() {
+        let err = validate_software_list("[{broken").unwrap_err();
+        assert!(err.contains("清单不是合法 JSON 数组"));
+    }
+
+    #[test]
+    fn validate_accepts_utf8_bom() {
+        // 远程源常见 utf-8-sig 响应应可解析
+        let text = "\u{feff}[{\"id\":\"bom1\",\"name\":\"B\",\"url\":\"u\"}]";
+        let list = validate_software_list(text).expect("带 BOM 清单应通过校验");
+        assert_eq!(list[0].id, "bom1");
+    }
+
+    #[test]
+    fn validate_empty_array_ok() {
+        let list = validate_software_list("[]").expect("空数组应通过校验");
+        assert!(list.is_empty());
+    }
 }
