@@ -322,6 +322,11 @@ pub fn run() {
                     let _ = win.set_resizable(false);
                 }
             }
+            // 前端就绪后统一显示窗口（消除启动白屏闪烁）
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
             Ok(())
         })
         .on_window_event(|window, event| match event {

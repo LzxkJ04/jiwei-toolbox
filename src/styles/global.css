@@ -300,3 +300,12 @@ body {
 .no-scrollbar:hover::-webkit-scrollbar-thumb {
   background: rgb(120 130 150 / 0.3);
 }
+
+/* 大列表渲染优化：视口外跳过渲染 */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cv-auto { content-visibility: visible; }
+}

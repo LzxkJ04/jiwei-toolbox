@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import {
-  Box, CheckCircle2, Copy, Download, GitCommitHorizontal,
+import { CheckCircle2, Copy, Download, GitCommitHorizontal,
   Hash, Link2, ShieldCheck, Star, TriangleAlert, X, XCircle,
 } from "lucide-vue-next";
 import Dialog from "./ui/Dialog.vue";
 import Button from "./ui/Button.vue";
 import Badge from "./ui/Badge.vue";
 import type { SoftwareItem } from "../lib/tauri";
+import SoftwareIcon from "./SoftwareIcon.vue";
 import { openPath } from "../lib/tauri";
 import { useSoftwareStore } from "../stores/software";
 import { useFavoritesStore } from "../stores/favorites";
@@ -110,13 +110,7 @@ async function openSoftware() {
     <div v-if="props.item" class="relative">
       <!-- 标题栏：图标 + 名称 + 版本 + 关闭 -->
       <div class="mb-4 flex items-start gap-3 pr-8">
-        <div
-          class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-xl font-bold"
-          :style="{ background: 'var(--primary-soft)', color: 'var(--primary)' }"
-        >
-          <Box v-if="!props.item.name" class="h-6 w-6" />
-          <template v-else>{{ props.item.name.slice(0, 1).toUpperCase() }}</template>
-        </div>
+        <SoftwareIcon :name="props.item?.name || ''" :homepage="props.item?.homepage" size="h-12 w-12" />
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2">
             <h3 class="truncate text-lg font-bold text-[var(--text-strong)]">

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { Box, CheckCircle2, ChevronRight, CircleDashed, Star, XCircle } from "lucide-vue-next";
+import { CheckCircle2, ChevronRight, CircleDashed, Star, XCircle } from "lucide-vue-next";
+import SoftwareIcon from "./SoftwareIcon.vue";
 import Checkbox from "./ui/Checkbox.vue";
 import Badge from "./ui/Badge.vue";
 import type { SoftwareItem } from "../lib/tauri";
@@ -47,19 +48,13 @@ function onCheck(v: boolean) {
 
 <template>
   <div
-    class="glass-card hover-lift group cursor-pointer p-4"
+    class="glass-card hover-lift group cursor-pointer p-4 cv-auto"
     :class="checked && 'border-[var(--primary)] shadow-[0_0_0_1px_var(--primary),0_8px_24px_var(--primary-glow)]'"
     @click="emit('detail')"
   >
     <div class="flex items-start gap-3">
-      <!-- 图标方块 -->
-      <div
-        class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-lg font-bold"
-        :style="{ background: 'var(--primary-soft)', color: 'var(--primary)' }"
-      >
-        <Box v-if="!item.name" class="h-5 w-5" />
-        <template v-else>{{ item.name.slice(0, 1).toUpperCase() }}</template>
-      </div>
+      <!-- 图标（favicon，失败降级首字母） -->
+      <SoftwareIcon :name="item.name || ''" :homepage="item.homepage" />
 
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
