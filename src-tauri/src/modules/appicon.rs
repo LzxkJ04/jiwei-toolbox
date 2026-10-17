@@ -42,6 +42,37 @@ fn to_data_url(bytes: &[u8]) -> String {
     out
 }
 
+
+/// 读 Windows 系统代理（HKCU Internet Settings，如 "127.0.0.1:7890"）
+fn system_proxy() -> Option<String> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    let hkcu = winreg::RegKey::predef(HKEY_CURRENT_USER);
+    let key = hkcu
+        .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
+        .ok()?;
+    let enabled: u32 = key.get_value("ProxyEnable").ok()?;
+    if enabled != 1 {
+        return None;
+    }
+    let server: String = key.get_value("ProxyServer").ok()?;
+    // ProxyServer 可能形如 "127.0.0.1:7890" 或 "http=...;https=..."，取 http 段
+    let server = if server.contains('=') {
+        server
+            .split(';')
+            .find_map(|seg| seg.strip_prefix("http=").map(|s| s.to_string()))
+            .unwrap_or(server)
+    } else {
+        server
+    };
+    if server.is_empty() {
+        None
+    } else if server.contains("://") {
+        Some(server)
+    } else {
+        Some(format!("http://{}", server))
+    }
+}
+
 /// 提取域名（复用前端同规则）
 fn extract_domain(homepage: &str) -> Option<String> {
     let rest = homepage
@@ -84,10 +115,15 @@ pub fn app_icon(homepage: String) -> String {
     }
     // 3) 在线拉取（走系统代理）
     let result = (|| -> Option<Vec<u8>> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(8))
-            .build()
-            .ok()?;
+        let mut builder = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(8));
+        // GUI 进程无环境变量代理：从注册表读 Windows 系统代理
+        if let Some(proxy) = system_proxy() {
+            if let Ok(px) = reqwest::Proxy::all(&proxy) {
+                builder = builder.proxy(px);
+            }
+        }
+        let client = builder.build().ok()?;
         let resp = client
             .get(format!("https://icons.duckduckgo.com/ip3/{}.ico", domain))
             .send()
