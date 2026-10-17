@@ -1,0 +1,599 @@
+[
+  {
+    "id": "chrome",
+    "name": "Google Chrome",
+    "category": "浏览器",
+    "url": "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi",
+    "sha256": "",
+    "silentArgs": "/qn /norestart",
+    "type": "msi",
+    "description": "Google 官方浏览器，速度快、生态完善",
+    "size_mb": 120,
+    "license": "free",
+    "homepage": "https://www.google.com/chrome/",
+    "changelog": [
+      {
+        "version": "131.0",
+        "date": "2024-11",
+        "notes": "稳定版更新，含安全修复"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "edge",
+    "name": "Microsoft Edge",
+    "category": "浏览器",
+    "url": "https://www.microsoft.com/zh-cn/edge/download",
+    "sha256": "",
+    "silentArgs": "/silent /install",
+    "type": "exe",
+    "notes": "需解析直链：微软官方直链含时效签名，建议运行时从下载页或 Edge 更新服务解析最新企业 MSI",
+    "description": "微软内置 Chromium 内核浏览器",
+    "size_mb": 150,
+    "license": "free",
+    "homepage": "https://www.microsoft.com/edge",
+    "changelog": [
+      {
+        "version": "131.0",
+        "date": "2024-11",
+        "notes": "与 Chromium 上游同步更新"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "firefox",
+    "name": "Mozilla Firefox",
+    "category": "浏览器",
+    "url": "https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=zh-CN",
+    "sha256": "",
+    "silentArgs": "/S",
+    "type": "exe",
+    "notes": "官方永久重定向直链，始终指向最新稳定版",
+    "description": "开源独立内核浏览器，注重隐私",
+    "size_mb": 90,
+    "license": "open",
+    "homepage": "https://www.mozilla.org/firefox/",
+    "changelog": [
+      {
+        "version": "133.0",
+        "date": "2024-11",
+        "notes": "隐私保护与性能改进"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "7zip",
+    "name": "7-Zip",
+    "category": "系统工具",
+    "url": "https://www.7-zip.org/a/7z2501-x64.exe",
+    "sha256": "",
+    "silentArgs": "/S",
+    "type": "exe",
+    "notes": "直链文件名含版本号，发布新版本时需同步更新 URL；以官网首页最新版为准",
+    "description": "经典开源压缩解压工具，支持多种格式",
+    "size_mb": 3,
+    "license": "open",
+    "homepage": "https://www.7-zip.org/",
+    "changelog": [
+      {
+        "version": "25.01",
+        "date": "2025-05",
+        "notes": "7z 格式编解码修复"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "vscode",
+    "name": "Visual Studio Code",
+    "category": "开发工具",
+    "url": "https://update.code.visualstudio.com/latest/win-x64/stable",
+    "sha256": "",
+    "silentArgs": "/VERYSILENT /NORESTART /MERGETASKS=!runcode",
+    "type": "exe",
+    "notes": "官方永久直链，始终指向最新稳定版系统级安装包",
+    "description": "微软开源轻量级代码编辑器，插件生态丰富",
+    "size_mb": 100,
+    "license": "open",
+    "homepage": "https://code.visualstudio.com/",
+    "changelog": [
+      {
+        "version": "1.96",
+        "date": "2024-12",
+        "notes": "编辑器性能与 AI 辅助改进"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "notepad-plus-plus",
+    "name": "Notepad++",
+    "category": "开发工具",
+    "url": "https://notepad-plus-plus.org/downloads/",
+    "sha256": "",
+    "silentArgs": "/S",
+    "type": "exe",
+    "notes": "需解析直链：从下载页或 GitHub Releases API 获取最新版 x64 安装包真实直链",
+    "description": "开源文本/代码编辑器，启动快占用低",
+    "size_mb": 10,
+    "license": "open",
+    "homepage": "https://notepad-plus-plus.org/",
+    "changelog": [
+      {
+        "version": "8.7",
+        "date": "2024-09",
+        "notes": "多文档界面与搜索增强"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "git",
+    "name": "Git for Windows",
+    "category": "开发工具",
+    "url": "https://github.com/git-for-windows/git/releases/latest",
+    "sha256": "",
+    "silentArgs": "/VERYSILENT /NORESTART",
+    "type": "exe",
+    "notes": "需解析直链：通过 GitHub Releases API 获取最新版 Git-*-64-bit.exe 下载地址",
+    "description": "分布式版本控制系统（Windows 版）",
+    "size_mb": 300,
+    "license": "open",
+    "homepage": "https://git-scm.com/",
+    "changelog": [
+      {
+        "version": "2.47",
+        "date": "2024-10",
+        "notes": "安全修复与性能优化"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "everything",
+    "name": "Everything",
+    "category": "系统工具",
+    "url": "https://www.voidtools.com/Everything-1.4.1.1028.x64-Setup.exe",
+    "sha256": "",
+    "silentArgs": "/S",
+    "type": "exe",
+    "notes": "直链文件名含版本号，需定期对照 voidtools 官网更新；也可运行时解析下载页",
+    "description": "极速全盘文件名搜索工具",
+    "size_mb": 3,
+    "license": "free",
+    "homepage": "https://www.voidtools.com/",
+    "changelog": [
+      {
+        "version": "1.4.1.1028",
+        "date": "2024-08",
+        "notes": "索引与筛选功能修复"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "wiztree",
+    "name": "WizTree",
+    "category": "系统工具",
+    "url": "https://wiztreefree.com/download",
+    "sha256": "",
+    "silentArgs": "/SILENT",
+    "type": "exe",
+    "notes": "需解析直链：从官网下载页获取最新版安装包直链",
+    "description": "基于 MFT 的极速磁盘空间分析工具",
+    "size_mb": 5,
+    "license": "free",
+    "homepage": "https://diskanalyzer.com/",
+    "changelog": [
+      {
+        "version": "4.18",
+        "date": "2024-06",
+        "notes": "扫描速度与 UI 改进"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "sumatrapdf",
+    "name": "SumatraPDF",
+    "category": "办公",
+    "url": "https://www.sumatrapdfreader.org/download-free-pdf-viewer",
+    "sha256": "",
+    "silentArgs": "/S",
+    "type": "exe",
+    "notes": "需解析直链：从官网或 GitHub Releases 获取最新 x64 安装包直链",
+    "description": "轻量开源 PDF/电子书阅读器",
+    "size_mb": 15,
+    "license": "open",
+    "homepage": "https://www.sumatrapdfreader.org/",
+    "changelog": [
+      {
+        "version": "3.5.2",
+        "date": "2024-05",
+        "notes": "PDF 渲染引擎更新"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "potplayer",
+    "name": "PotPlayer",
+    "category": "影音",
+    "url": "https://t1.daumcdn.net/potplayer/PotPlayer/Version/Latest/PotPlayerSetup64.exe",
+    "sha256": "",
+    "silentArgs": "/S",
+    "type": "exe",
+    "notes": "官方 Latest 永久直链，始终指向最新 64 位版",
+    "description": "功能强大的多媒体播放器，格式支持全面",
+    "size_mb": 30,
+    "license": "free",
+    "homepage": "https://potplayer.daum.net/",
+    "changelog": [
+      {
+        "version": "240910",
+        "date": "2024-09",
+        "notes": "解码器与字幕功能更新"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "k-lite",
+    "name": "K-Lite Codec Pack Standard",
+    "category": "影音",
+    "url": "https://files2.codecguide.com/K-Lite_Codec_Pack_1890_Standard.exe",
+    "sha256": "",
+    "silentArgs": "/VERYSILENT /NORESTART",
+    "type": "exe",
+    "notes": "直链文件名含版本号，需对照 codecguide.com 更新；或解析官网下载页直链",
+    "description": "集成编解码器与播放器的影音套装",
+    "size_mb": 50,
+    "license": "free",
+    "homepage": "https://www.codecguide.com/",
+    "changelog": [
+      {
+        "version": "18.9",
+        "date": "2024-11",
+        "notes": "MPC-HC 与解码器组件更新"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "vlc",
+    "name": "VLC Media Player",
+    "category": "影音",
+    "url": "https://get.videolan.org/vlc/last/win64/",
+    "sha256": "",
+    "silentArgs": "/S",
+    "type": "exe",
+    "notes": "官方 last 永久重定向，指向最新 win64 安装包",
+    "description": "开源跨平台多媒体播放器",
+    "size_mb": 45,
+    "license": "open",
+    "homepage": "https://www.videolan.org/vlc/",
+    "changelog": [
+      {
+        "version": "3.0.21",
+        "date": "2024-07",
+        "notes": "安全修复与格式支持改进"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "bandizip",
+    "name": "Bandizip",
+    "category": "系统工具",
+    "url": "https://dl.bandizip.com/Bandizip.exe",
+    "sha256": "",
+    "silentArgs": "/S",
+    "type": "exe",
+    "notes": "官方直链，指向最新版安装器；免费版功能以官网说明为准",
+    "description": "高速免费压缩工具，支持多核压缩",
+    "size_mb": 20,
+    "license": "free",
+    "homepage": "https://www.bandisoft.com/bandizip/",
+    "changelog": [
+      {
+        "version": "7.36",
+        "date": "2024-10",
+        "notes": "压缩算法与界面优化"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "snipaste",
+    "name": "Snipaste",
+    "category": "系统工具",
+    "url": "https://zh.snipaste.com/download.html",
+    "sha256": "",
+    "silentArgs": "/S",
+    "type": "exe",
+    "notes": "需解析直链：从官网下载页解析最新 x64 安装包直链",
+    "description": "精准截图 + 贴图工具",
+    "size_mb": 20,
+    "license": "free",
+    "homepage": "https://zh.snipaste.com/",
+    "changelog": [
+      {
+        "version": "2.8.9",
+        "date": "2024-08",
+        "notes": "贴图与标注功能改进"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "trafficmonitor",
+    "name": "TrafficMonitor",
+    "category": "系统工具",
+    "url": "https://github.com/Binaryify/TrafficMonitor/releases/latest",
+    "sha256": "",
+    "silentArgs": "",
+    "type": "exe",
+    "notes": "需解析直链：绿色软件，通过 GitHub Releases API 获取最新 x64 zip，解压即用，silentArgs 留空表示免安装",
+    "description": "开源任务栏网速监控悬浮窗",
+    "size_mb": 2,
+    "license": "open",
+    "homepage": "https://github.com/BlastApps/TrafficMonitor",
+    "changelog": [
+      {
+        "version": "1.85",
+        "date": "2024-05",
+        "notes": "Win11 任务栏兼容修复"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "powertoys",
+    "name": "Microsoft PowerToys",
+    "category": "系统工具",
+    "url": "https://github.com/microsoft/PowerToys/releases/latest",
+    "sha256": "",
+    "silentArgs": "/qn /norestart",
+    "type": "exe",
+    "notes": "需解析直链：通过 GitHub Releases API 获取最新 x64 exe/msi 安装包直链",
+    "description": "微软官方 Windows 效率增强工具集",
+    "size_mb": 250,
+    "license": "open",
+    "homepage": "https://learn.microsoft.com/windows/powertoys/",
+    "changelog": [
+      {
+        "version": "0.86",
+        "date": "2024-11",
+        "notes": "新增/改进多个实用模块"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "wechat",
+    "name": "微信 WeChat",
+    "category": "社交办公",
+    "url": "https://dldir1.qq.com/weixin/Windows/WeChatSetup.exe",
+    "sha256": "",
+    "silentArgs": "",
+    "type": "exe",
+    "notes": "腾讯 CDN 直链；新版安装器静默参数需验证，不确定时置空并在 UI 提示手动完成安装向导",
+    "description": "腾讯微信即时通讯客户端（Windows 版）",
+    "size_mb": 250,
+    "license": "free",
+    "homepage": "https://pc.weixin.qq.com/",
+    "changelog": [
+      {
+        "version": "4.0",
+        "date": "2024-11",
+        "notes": "全新界面与性能升级"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "qq",
+    "name": "QQ (NT)",
+    "category": "社交办公",
+    "url": "https://im.qq.com/pcqq/index.shtml",
+    "sha256": "",
+    "silentArgs": "",
+    "type": "exe",
+    "notes": "需解析直链：从官网下载页解析最新 NT 版安装包直链；静默参数需验证",
+    "description": "腾讯 QQ 即时通讯客户端（NT 架构）",
+    "size_mb": 200,
+    "license": "free",
+    "homepage": "https://im.qq.com/",
+    "changelog": [
+      {
+        "version": "9.9.16",
+        "date": "2024-10",
+        "notes": "NT 架构界面与性能优化"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "dingtalk",
+    "name": "钉钉 DingTalk",
+    "category": "社交办公",
+    "url": "https://page.dingtalk.com/wow/dingtalk/act/download",
+    "sha256": "",
+    "silentArgs": "",
+    "type": "exe",
+    "notes": "需解析直链：从官方下载页解析 Windows 版安装包直链；静默参数需验证",
+    "description": "阿里巴巴钉钉办公协同客户端",
+    "size_mb": 300,
+    "license": "free",
+    "homepage": "https://www.dingtalk.com/",
+    "changelog": [
+      {
+        "version": "7.6",
+        "date": "2024-10",
+        "notes": "协同办公功能更新"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "feishu",
+    "name": "飞书 Feishu",
+    "category": "社交办公",
+    "url": "https://www.feishu.cn/downloads",
+    "sha256": "",
+    "silentArgs": "",
+    "type": "exe",
+    "notes": "需解析直链：从官方下载页解析 Windows 64 位安装包直链；静默参数需验证",
+    "description": "字节跳动飞书办公协同客户端",
+    "size_mb": 300,
+    "license": "free",
+    "homepage": "https://www.feishu.cn/",
+    "changelog": [
+      {
+        "version": "7.25",
+        "date": "2024-11",
+        "notes": "文档与会议体验改进"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "steam",
+    "name": "Steam",
+    "category": "游戏",
+    "url": "https://cdn.akamai.steamstatic.com/client/installer/SteamSetup.exe",
+    "sha256": "",
+    "silentArgs": "/S",
+    "type": "exe",
+    "notes": "Valve 官方 CDN 稳定直链",
+    "description": "Valve 游戏平台与商店客户端",
+    "size_mb": 250,
+    "license": "free",
+    "homepage": "https://store.steampowered.com/",
+    "changelog": [
+      {
+        "version": "",
+        "date": "持续更新",
+        "notes": "平台由 Valve 自动滚动更新"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "epic",
+    "name": "Epic Games Launcher",
+    "category": "游戏",
+    "url": "https://store.epicgames.com/zh-CN/download",
+    "sha256": "",
+    "silentArgs": "",
+    "type": "exe",
+    "notes": "需解析直链：从官方下载页解析 EpicInstaller 直链；安装器为 Inno Setup，静默参数 /VERYSILENT /NORESTART 需验证",
+    "description": "Epic Games 游戏平台与商店客户端",
+    "size_mb": 300,
+    "license": "free",
+    "homepage": "https://store.epicgames.com/",
+    "changelog": [
+      {
+        "version": "",
+        "date": "持续更新",
+        "notes": "平台由 Epic 自动滚动更新"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "obs",
+    "name": "OBS Studio",
+    "category": "影音",
+    "url": "https://cdn-fastly.obsproject.com/downloads/OBS-Studio-31.0.3-Full-Installer-x64.exe",
+    "sha256": "",
+    "silentArgs": "/S",
+    "type": "exe",
+    "notes": "直链文件名含版本号，需对照 obsproject.com 更新；或解析官网自动下载入口",
+    "description": "开源直播与录屏软件",
+    "size_mb": 150,
+    "license": "open",
+    "homepage": "https://obsproject.com/",
+    "changelog": [
+      {
+        "version": "31.0",
+        "date": "2024-11",
+        "notes": "编码器与性能改进"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "typora",
+    "name": "Typora",
+    "category": "办公",
+    "url": "https://typora.io/releases/all",
+    "sha256": "",
+    "silentArgs": "/VERYSILENT /NORESTART",
+    "type": "exe",
+    "notes": "需解析直链：付费软件，从 releases 页解析最新 x64 安装包直链；是否收录由产品决策",
+    "description": "所见即所得 Markdown 编辑器（付费）",
+    "size_mb": 80,
+    "license": "commercial",
+    "homepage": "https://typora.io/",
+    "changelog": [
+      {
+        "version": "1.8",
+        "date": "2024-03",
+        "notes": "主题与导出功能改进"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  },
+  {
+    "id": "libreoffice",
+    "name": "LibreOffice",
+    "category": "办公",
+    "url": "https://download.documentfoundation.org/libreoffice/stable/",
+    "sha256": "",
+    "silentArgs": "/S",
+    "type": "msi",
+    "notes": "需解析直链：stable 目录下选取最新版 win/x86_64 的 msi；NSIS 静默参数为 /S",
+    "description": "开源办公套件（文档/表格/演示）",
+    "size_mb": 350,
+    "license": "open",
+    "homepage": "https://www.libreoffice.org/",
+    "changelog": [
+      {
+        "version": "24.8",
+        "date": "2024-08",
+        "notes": "兼容性与办公功能更新"
+      }
+    ],
+    "depends": [],
+    "md5": ""
+  }
+]

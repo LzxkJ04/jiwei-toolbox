@@ -1,0 +1,7 @@
+node_modules/
+dist/
+dist-logic/
+src-tauri/target/
+src-tauri/resources/jiwei-logic.exe
+*.log
+.wegrc

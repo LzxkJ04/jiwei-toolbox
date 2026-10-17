@@ -1,0 +1,535 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { toast } from "./toast";
+
+/* ============ 类型定义（与 Rust 后端契约对应） ============ */
+
+export interface Dirs {
+  program: string;
+  /** 用户数据目录（双路径模型；后端由其派生 config/backup/cache/log） */
+  data: string;
+  config: string;
+  backup: string;
+  cache: string;
+  log: string;
+}
+
+export interface EnvStatus {
+  is_admin: boolean;
+  has_webview2: boolean;
+}
+
+export interface SoftwareItem {
+  id: string;
+  name: string;
+  category: string;
+  url: string;
+  sha256: string;
+  silentArgs: string;
+  type: string;
+  notes: string;
+  /** 一句话简介 */
+  description: string;
+  /** 估算安装包/安装体积（MB） */
+  size_mb: number;
+  /** "free" | "open" | "commercial" */
+  license: string;
+  /** 官网 */
+  homepage: string;
+  /** 更新日志 */
+  changelog: ChangelogEntry[];
+  /** 依赖的其他软件 id */
+  depends: string[];
+}
+
+export interface InstalledApp {
+  name: string;
+  version: string;
+  publisher: string;
+  uninstaller: string;
+  key: string;
+  size_estimate: number;
+}
+
+export interface ResidualItem {
+  kind: string; // "file" | "dir" | "reg"
+  target: string;
+}
+
+export interface ChangelogEntry {
+  version: string;
+  date: string;
+  notes: string;
+}
+
+export interface HwInfo {
+  cpu: { name: string; cores: number; threads: number };
+  memory_total: number;
+  board: string;
+  gpus: { name: string; vram: number }[];
+  disks: { model: string; size: number }[];
+}
+
+export interface DiskSpeed {
+  read_mbps: number;
+  write_mbps: number;
+}
+
+export interface StartupItem {
+  name: string;
+  command: string;
+  location: string;
+}
+
+export interface ServiceItem {
+  name: string;
+  display: string;
+  status: string;
+  start_type: string;
+}
+
+export interface JunkItem {
+  path: string;
+  size: number;
+  kind: string;
+}
+
+export interface EnvVar {
+  name: string;
+  value: string;
+}
+
+export interface BackupItem {
+  file: string;
+  size: number;
+  time: string;
+}
+
+export interface CacheStats {
+  dirs: { name: string; size: number }[];
+  total: number;
+}
+
+export interface InstallProgress {
+  id: string;
+  stage: string;
+  pct: number;
+  msg: string;
+}
+
+export interface InstallSummary {
+  total: number;
+  success: string[];
+  failed: { id: string; reason: string }[];
+  skipped: number;
+}
+
+export interface UpdateResult {
+  count: number;
+  source: string;
+}
+
+export interface GpuLoad {
+  pct: number;
+  fps: number;
+  error?: string;
+}
+
+export interface MemTestProgress {
+  pct: number;
+  errors: number;
+}
+
+export interface MemTestResult {
+  errors: number;
+  blocks_total: number;
+  seconds: number;
+}
+
+export interface RuntimeLib {
+  id: string;
+  name: string;
+  installed: boolean;
+  version: string;
+  download_url: string;
+}
+
+export interface UwpApp {
+  name: string;
+  package: string;
+  version: string;
+}
+
+export interface KillResult {
+  killed: number[];
+  failed: number[];
+}
+
+export interface DiskSmartInfo {
+  model: string;
+  serial: string;
+  bus_type: string;
+  media: string;
+  /** "Healthy" | "Warning" | "Unhealthy" 等原始状态串 */
+  status?: string;
+  /** 健康度估算（0~100），可能缺失 */
+  health?: number | null;
+  /** 摄氏温度，可能缺失 */
+  temperature_c?: number | null;
+  /** 通电小时数，可能缺失 */
+  power_on_hours?: number | null;
+  /** 磨损百分比，可能缺失 */
+  wear_pct?: number | null;
+}
+
+export interface DriverInfo {
+  device_name: string;
+  version: string;
+  provider: string;
+  date: string;
+  inf_name: string;
+}
+
+export interface DriverExportResult {
+  file: string;
+  count: number;
+}
+
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  has_update: boolean;
+  /** 下载页地址，可能为空 */
+  url?: string;
+  /** 更新说明，可能为空 */
+  notes?: string;
+}
+
+/* ============ 通用封装 ============ */
+
+/** 带统一错误 toast 的安全调用；失败返回 null */
+export async function tryCall<T>(cmd: string, args?: Record<string, unknown>): Promise<T | null> {
+  try {
+    return await invoke<T>(cmd, args as any);
+  } catch (err) {
+    console.error(`[tauri] ${cmd} 调用失败:`, err);
+    toast(`操作失败（${cmd}）：${String(err)}`, "error");
+    return null;
+  }
+}
+
+/** 注册事件监听，返回取消函数 */
+export function onInstallProgress(handler: (p: InstallProgress) => void): Promise<UnlistenFn> {
+  return listen<InstallProgress>("install-progress", (e) => handler(e.payload));
+}
+
+export function onCpuLoad(handler: (data: { pct: number }) => void): Promise<UnlistenFn> {
+  return listen<{ pct: number }>("cpu-load", (e) => handler(e.payload));
+}
+
+export function onGpuLoad(handler: (data: GpuLoad) => void): Promise<UnlistenFn> {
+  return listen<GpuLoad>("gpu-load", (e) => handler(e.payload));
+}
+
+export function onMemTestProgress(handler: (data: MemTestProgress) => void): Promise<UnlistenFn> {
+  return listen<MemTestProgress>("mem-test-progress", (e) => handler(e.payload));
+}
+
+export function onMemTestDone(handler: (data: MemTestResult) => void): Promise<UnlistenFn> {
+  return listen<MemTestResult>("mem-test-done", (e) => handler(e.payload));
+}
+
+export function onRuntimeProgress(
+  handler: (data: { id: string; stage: string; pct: number }) => void
+): Promise<UnlistenFn> {
+  return listen<{ id: string; stage: string; pct: number }>("runtime-progress", (e) => handler(e.payload));
+}
+
+/** 批量安装完成汇总 */
+export function onInstallSummary(handler: (data: InstallSummary) => void): Promise<UnlistenFn> {
+  return listen<InstallSummary>("install-summary", (e) => handler(e.payload));
+}
+
+/** 托盘菜单触发的页面跳转 */
+export function onNavigate(handler: (data: { page: string }) => void): Promise<UnlistenFn> {
+  return listen<{ page: string }>("navigate", (e) => handler(e.payload));
+}
+
+/** 首次最小化到托盘提示 */
+export function onTrayHided(handler: () => void): Promise<UnlistenFn> {
+  return listen("tray-hided", () => handler());
+}
+
+/* ============ 命令包装 ============ */
+
+// —— 环境 / 目录 / 设置
+export const getDirs = () => tryCall<Dirs>("get_dirs");
+export const getEnvStatus = () => tryCall<EnvStatus>("env_status");
+export const downloadWebview2 = () => tryCall<string>("download_webview2");
+export const installWebview2 = () => tryCall<boolean>("install_webview2");
+export const getSetting = (key: string) => tryCall<string>("get_setting", { key });
+export const setSetting = (key: string, value: string) => tryCall<null>("set_setting", { key, value });
+export const getAutostart = () => tryCall<boolean>("get_autostart");
+export const setAutostart = (enable: boolean) => tryCall<null>("set_autostart", { enable });
+export const getCloseToTray = () => tryCall<boolean>("get_close_to_tray");
+export const setCloseToTray = (enable: boolean) => tryCall<null>("set_close_to_tray", { enable });
+export const getFavorites = () => tryCall<string[]>("get_favorites");
+/** 切换收藏（已收藏则取消），返回更新后的收藏列表 */
+export const toggleFavorite = (id: string) => tryCall<string[]>("toggle_favorite", { id });
+
+// —— 软件安装
+export const listSoftware = () => tryCall<SoftwareItem[]>("list_software");
+export const installBatch = (ids: string[]) => tryCall<null>("install_batch", { ids });
+export const cancelInstall = () => tryCall<null>("cancel_install");
+/** 从远程源更新软件清单；失败抛错（tryCall 返回 null） */
+export const updateSoftwareList = () => tryCall<UpdateResult>("update_software_list");
+
+// —— 任务队列控制
+export interface QueueStateInfo {
+  running: boolean;
+  paused: boolean;
+  currentId: string;
+  totalPct: number;
+  total: number;
+  done: number;
+}
+export const pauseTasks = () => tryCall<null>("pause_tasks");
+export const resumeTasks = () => tryCall<null>("resume_tasks");
+export const terminateTasks = (deleteCache: boolean) =>
+  tryCall<null>("terminate_tasks", { deleteCache });
+export const getQueueState = () => tryCall<QueueStateInfo>("get_queue_state");
+/** 完成动作持久化：none | notify | log | shutdown | hibernate */
+export const setTaskCompleteAction = (action: string) =>
+  tryCall<null>("set_task_complete_action", { action });
+/** 加入安装队列（后台串行，进度经 install-progress / queue-state 推送） */
+export const queueInstall = (ids: string[]) => tryCall<null>("queue_install", { ids });
+/** 真正退出（先终止任务队列） */
+export const forceExit = () => invoke<null>("force_exit");
+
+/** 队列运行状态推送 */
+export function onQueueState(handler: (s: QueueStateInfo) => void): Promise<UnlistenFn> {
+  return listen<QueueStateInfo>("queue-state", (e) => handler(e.payload));
+}
+/** 完成动作为"弹出通知"时后端推送 */
+export function onTasksDone(handler: () => void): Promise<UnlistenFn> {
+  return listen("tasks-done", () => handler());
+}
+/** 托盘点击退出但任务仍在执行：前端弹确认窗 */
+export function onExitConfirmRequest(handler: () => void): Promise<UnlistenFn> {
+  return listen("exit-confirm-request", () => handler());
+}
+/** 托盘操作结果通知（如清理缓存完成） */
+export function onTrayNotify(handler: (msg: string) => void): Promise<UnlistenFn> {
+  return listen<string | null>("tray-notify", (e) => handler(e.payload ?? ""));
+}
+
+// —— 卸载
+export const listInstalled = () => tryCall<InstalledApp[]>("list_installed");
+export const scanResidual = (name: string) => tryCall<ResidualItem[]>("scan_residual", { name });
+export const removeResidual = (items: ResidualItem[]) => tryCall<null>("remove_residual", { items });
+/** 按名称匹配正在运行的进程，返回 PID 列表（无匹配为空数组；调用失败返回 null，视为"未知"） */
+export const processRunning = (name: string) => tryCall<number[]>("process_running", { name });
+/** 结束指定进程，返回成功/失败 PID 分组 */
+export const killProcess = (pids: number[]) => tryCall<KillResult>("kill_process", { pids });
+
+// —— 硬件
+export const hwInfo = () => tryCall<HwInfo>("hw_info");
+export const cpuBurnStart = (seconds: number) => tryCall<null>("cpu_burn_start", { seconds });
+export const cpuBurnStop = () => tryCall<null>("cpu_burn_stop");
+export const diskSpeed = (path: string) => tryCall<DiskSpeed>("disk_speed", { path });
+export const gpuBurnStart = (seconds: number) => tryCall<null>("gpu_burn_start", { seconds });
+export const gpuBurnStop = () => tryCall<null>("gpu_burn_stop");
+export const memTestStart = () => tryCall<null>("mem_test_start");
+/** 读取磁盘 SMART 健康信息；失败（无管理员权限/不支持 SMART）返回 null */
+export const diskSmart = () => tryCall<DiskSmartInfo[]>("disk_smart");
+/** CPU 温度（摄氏），传感器不可用返回 null */
+export const cpuTemp = () => tryCall<number | null>("cpu_temp");
+/** GPU 温度（摄氏），传感器不可用返回 null */
+export const gpuTemp = () => tryCall<number | null>("gpu_temp");
+
+// —— 驱动
+/** 枚举本机驱动；失败返回 null */
+export const driverList = () => tryCall<DriverInfo[]>("driver_list");
+/** 导出驱动清单 CSV，返回文件路径与条数 */
+export const exportDriverList = () => tryCall<DriverExportResult>("export_driver_list");
+
+// —— 更新
+/** 检查应用更新；失败返回 null */
+export const checkUpdate = () => tryCall<UpdateInfo>("check_update");
+
+// —— 系统工具
+export const listStartup = () => tryCall<StartupItem[]>("list_startup");
+export const toggleStartup = (name: string, enable: boolean) =>
+  tryCall<null>("toggle_startup", { name, enable });
+export const listServices = () => tryCall<ServiceItem[]>("list_services");
+export const setService = (name: string, action: string) =>
+  tryCall<null>("set_service", { name, action });
+export const readHosts = () => tryCall<string>("read_hosts");
+export const writeHosts = (content: string) => tryCall<null>("write_hosts", { content });
+export const scanJunk = () => tryCall<JunkItem[]>("scan_junk");
+export const cleanJunk = (paths: string[]) => tryCall<null>("clean_junk", { paths });
+export const getEnvVars = (scope: "user" | "system") => tryCall<EnvVar[]>("get_env_vars", { scope });
+export const setEnvVar = (scope: "user" | "system", name: string, value: string, isDelete: boolean) =>
+  tryCall<null>("set_env_var", { scope, name, value, isDelete });
+export const listRuntimeLibs = () => tryCall<RuntimeLib[]>("list_runtime_libs");
+export const installRuntime = (id: string) => tryCall<null>("install_runtime", { id });
+export const listUwp = () => tryCall<UwpApp[]>("list_uwp");
+export const removeUwp = (pkg: string) => tryCall<null>("remove_uwp", { package: pkg });
+export const exportConfig = () => tryCall<{ file: string }>("export_config");
+export const importConfig = (file: string) => tryCall<null>("import_config", { file });
+
+// —— 备份 / 缓存
+export const createBackup = (note: string) => tryCall<{ file: string }>("create_backup", { note });
+export const listBackups = () => tryCall<BackupItem[]>("list_backups");
+export const restoreBackup = (file: string) => tryCall<null>("restore_backup", { file });
+export const cacheStats = () => tryCall<CacheStats>("cache_stats");
+export const cleanCache = () => tryCall<null>("clean_cache");
+
+export interface CacheFile {
+  name: string;
+  path: string;
+  size: number;
+  /** 修改时间（秒级时间戳） */
+  mtime: number;
+  /** "download" | "temp" | "log" */
+  kind: string;
+}
+/** 缓存目录内文件明细（供缓存管理弹窗） */
+export const cacheFiles = () => tryCall<CacheFile[]>("cache_files");
+/** 按文件名删除缓存文件 */
+export const cacheDelete = (names: string[]) => tryCall<null>("cache_delete", { names });
+
+// —— 任务默认选项 / 自动清理
+export interface TaskOpts {
+  /** "serial" | "parallel" */
+  mode: string;
+  /** 下载并发数 1~5 */
+  concurrency: number;
+  /** 下载限速 KB/s，0 = 不限速 */
+  speed_limit_kb: number;
+}
+export const getTaskOpts = () => tryCall<TaskOpts>("get_task_opts");
+export const setTaskOpts = (mode: string, concurrency: number, speed_limit_kb: number) =>
+  tryCall<null>("set_task_opts", { mode, concurrency, speed_limit_kb });
+/** 启动时自动生成软件清单简易备份 */
+export const getAutoBackupInventory = () => tryCall<boolean>("get_auto_backup_inventory");
+export const setAutoBackupInventory = (enable: boolean) =>
+  tryCall<null>("set_auto_backup_inventory", { enable });
+/** 日志自动清理周期（天），0 = 关闭 */
+export const setLogRetention = (days: number) => tryCall<null>("set_log_retention", { days });
+
+// —— 日志
+export const listLogs = () => tryCall<string[]>("list_logs");
+export const readLog = (file: string) => tryCall<string>("read_log", { file });
+export const openLogDir = () => tryCall<null>("open_log_dir");
+
+/* ============ 引导壳（安装器 / 卸载器） ============ */
+
+/** 启动模式；未接入后端（如纯浏览器调试）时回退为 main */
+export async function getLaunchMode(): Promise<
+  "main" | "installer" | "uninstaller" | "repair" | "unattended"
+> {
+  try {
+    const m = await invoke<string>("get_launch_mode");
+    return m === "installer" || m === "uninstaller" || m === "repair" || m === "unattended"
+      ? (m as "installer" | "uninstaller" | "repair" | "unattended")
+      : "main";
+  } catch {
+    return "main";
+  }
+}
+
+// —— 安装器
+/** 打开系统目录选择对话框，返回所选目录（取消返回空串/null） */
+export const instChooseDir = () => tryCall<string>("inst_choose_dir");
+/** 查询路径所在盘剩余空间（字节；失败 0=未知） */
+export const instDiskFree = (path: string) => tryCall<number>("inst_disk_free", { path });
+/** 开始安装：WebView2 预装（按需）+ 拷贝程序文件 + 创建数据目录 + 静默安装逻辑包 */
+export const instStart = (
+  dir: string,
+  dataDir: string,
+  desktop: boolean,
+  startMenu: boolean,
+  admin: boolean,
+  installWebv2: boolean
+) => tryCall<null>("inst_start", { dir, dataDir, desktop, startMenu, admin, installWebv2 });
+/** 取消安装（后端终止任务；仅拷贝阶段生效） */
+export const instCancel = () => tryCall<null>("inst_cancel");
+/** 完成安装：可选立即启动 / 打开配置目录，随后后端退出引导进程 */
+export const instFinish = (run: boolean, openCfg: boolean) =>
+  tryCall<null>("inst_finish", { run, openCfg });
+
+export interface InstallerProgress {
+  stage: "copy" | "logic" | "webview2" | "done";
+  pct: number;
+  msg: string;
+}
+export interface InstallerDone {
+  ok: boolean;
+  dir?: string;
+  err?: string;
+}
+export function onInstallerProgress(handler: (p: InstallerProgress) => void): Promise<UnlistenFn> {
+  return listen<InstallerProgress>("installer-progress", (e) => handler(e.payload));
+}
+export function onInstallerDone(handler: (d: InstallerDone) => void): Promise<UnlistenFn> {
+  return listen<InstallerDone>("installer-done", (e) => handler(e.payload));
+}
+
+/** WebView2 预检下载/安装进度（依赖预检页直接调用 download/install 时使用） */
+export function onWebview2Progress(
+  handler: (p: { stage: string; pct: number }) => void
+): Promise<UnlistenFn> {
+  return listen<{ stage: string; pct: number }>("webview2-progress", (e) => handler(e.payload));
+}
+
+// —— 卸载器
+/** 开始卸载；keep_data = 是否保留用户配置与备份数据 */
+export const uninsStart = (keepData: boolean) => tryCall<null>("unins_start", { keepData });
+
+export function onUninstallerProgress(
+  handler: (p: { stage: string }) => void
+): Promise<UnlistenFn> {
+  return listen<{ stage: string }>("uninstaller-progress", (e) => handler(e.payload));
+}
+export function onUninstallerDone(handler: (d: { ok: boolean }) => void): Promise<UnlistenFn> {
+  return listen<{ ok: boolean }>("uninstaller-done", (e) => handler(e.payload));
+}
+
+// —— 修复模式
+/** 从主程序重启进入修复模式（后端 spawn 自身 --repair 后退出当前进程） */
+export const relaunchRepair = () => tryCall<null>("relaunch_repair");
+/** 开始修复：校验程序文件 / 重建 dirs.json / 修复快捷方式与文件关联 */
+export const repairStart = () => tryCall<null>("repair_start");
+
+export interface RepairProgress {
+  stage: "check" | "dirs" | "shortcut" | "done";
+  pct: number;
+  msg: string;
+}
+export interface RepairDoneItem {
+  item: string;
+  /** "ok" | "repaired" | "warn" */
+  status: string;
+  detail: string;
+}
+export interface RepairDone {
+  ok: boolean;
+  items: RepairDoneItem[];
+}
+export function onRepairProgress(handler: (p: RepairProgress) => void): Promise<UnlistenFn> {
+  return listen<RepairProgress>("repair-progress", (e) => handler(e.payload));
+}
+export function onRepairDone(handler: (d: RepairDone) => void): Promise<UnlistenFn> {
+  return listen<RepairDone>("repair-done", (e) => handler(e.payload));
+}
+
+// —— 版本升级预填
+export interface ExistingInstall {
+  exists: boolean;
+  program: string;
+  data: string;
+  oldVersion: string;
+}
+/** 检测已有安装（注册表 Dirs + 版本号），供安装向导预填 */
+export const instDetectExisting = () => tryCall<ExistingInstall>("inst_detect_existing");

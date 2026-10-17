@@ -1,0 +1,302 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============ 主题变量（现代 Fluent 设计语言） ============ */
+
+:root {
+  /* 浅色主题 */
+  --bg: #f4f6fb;
+  --text: #1f2430;
+  --text-strong: #11141c;
+  --card: rgba(255, 255, 255, 0.82);
+  --card-solid: #ffffff;
+  --card-border: rgba(28, 36, 56, 0.1);
+  --card-soft: rgba(120, 130, 150, 0.08);
+  --muted: #6b7280;
+  --btn-gray: rgba(120, 130, 150, 0.1);
+  --sidebar-bg: rgba(245, 247, 252, 0.75);
+
+  /* 主色调（默认 blue），由 data-accent 切换 */
+  --primary: #3b82f6;
+  --primary-hov: #60a5fa;
+  --primary-soft: rgba(59, 130, 246, 0.12);
+  --primary-glow: rgba(59, 130, 246, 0.35);
+}
+
+[data-theme="dark"] {
+  /* 深色主题（主程序默认） */
+  --bg: #14161f;
+  --text: #e8eaf0;
+  --text-strong: #ffffff;
+  --card: rgba(27, 30, 43, 0.7);
+  --card-solid: #1b1e2b;
+  --card-border: rgba(255, 255, 255, 0.08);
+  --card-soft: rgba(255, 255, 255, 0.06);
+  --muted: #9aa0ae;
+  --btn-gray: rgba(154, 160, 174, 0.12);
+  --sidebar-bg: rgba(22, 24, 34, 0.8);
+}
+
+/* ============ 主色调 4 选 ============ */
+[data-accent="blue"] {
+  --primary: #3b82f6;
+  --primary-hov: #60a5fa;
+  --primary-soft: rgba(59, 130, 246, 0.12);
+  --primary-glow: rgba(59, 130, 246, 0.35);
+}
+[data-accent="cyan"] {
+  --primary: #06b6d4;
+  --primary-hov: #22d3ee;
+  --primary-soft: rgba(6, 182, 212, 0.12);
+  --primary-glow: rgba(6, 182, 212, 0.35);
+}
+[data-accent="purple"] {
+  --primary: #8b5cf6;
+  --primary-hov: #a78bfa;
+  --primary-soft: rgba(139, 92, 246, 0.12);
+  --primary-glow: rgba(139, 92, 246, 0.35);
+}
+[data-accent="orange"] {
+  --primary: #f97316;
+  --primary-hov: #fb923c;
+  --primary-soft: rgba(249, 115, 22, 0.12);
+  --primary-glow: rgba(249, 115, 22, 0.35);
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  color: var(--text);
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  overflow: hidden;
+  /* 低饱和径向渐变背景 */
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(1100px 520px at 18% -8%, var(--primary-soft) 0%, transparent 60%),
+    radial-gradient(1200px 600px at 50% -10%, rgba(148, 163, 196, 0.14) 0%, transparent 65%),
+    radial-gradient(900px 500px at 95% 110%, var(--primary-soft) 0%, transparent 55%);
+  background-attachment: fixed;
+}
+[data-theme="dark"] body {
+  background-image:
+    radial-gradient(1100px 520px at 18% -8%, var(--primary-soft) 0%, transparent 60%),
+    radial-gradient(1200px 600px at 50% -10%, #1a1e2c 0%, transparent 65%),
+    radial-gradient(900px 500px at 95% 110%, var(--primary-soft) 0%, transparent 55%);
+}
+
+/* 选中文字颜色 */
+::selection {
+  background: var(--primary-soft);
+}
+
+@layer components {
+  /* ---------- 毛玻璃卡片 ---------- */
+  .glass-card {
+    position: relative;
+    background: var(--card);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    box-shadow: 0 4px 24px rgb(0 0 0 / 0.08);
+    transition:
+      transform 0.22s cubic-bezier(0.25, 0.8, 0.35, 1),
+      box-shadow 0.22s ease,
+      border-color 0.22s ease,
+      background-color 0.22s ease;
+  }
+  .glass-card.hover-lift:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 14px 36px rgb(0 0 0 / 0.16);
+    border-color: var(--primary-glow);
+  }
+
+  /* ---------- 按钮体系 ---------- */
+  .btn {
+    @apply inline-flex cursor-pointer select-none items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--primary-glow);
+  }
+
+  .btn-primary {
+    color: #fff;
+    background: linear-gradient(180deg, var(--primary-hov), var(--primary));
+    box-shadow: 0 2px 10px var(--primary-glow);
+  }
+  .btn-primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+    filter: brightness(1.06);
+    box-shadow: 0 4px 16px var(--primary-glow);
+  }
+  .btn-primary:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  .btn-gray {
+    background-color: var(--btn-gray);
+    border: 1px solid var(--card-border);
+    color: var(--text);
+    backdrop-filter: blur(8px);
+  }
+  .btn-gray:hover:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+  .btn-gray:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  .btn-danger {
+    color: #fff;
+    background: linear-gradient(135deg, #e5484d, #ff6b6f);
+    box-shadow: 0 2px 8px rgb(229 72 77 / 0.35);
+  }
+  .btn-danger:hover:not(:disabled) {
+    transform: translateY(-1px);
+    filter: brightness(1.06);
+  }
+  .btn-danger:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  /* ---------- 表单 ---------- */
+  .input-base {
+    @apply w-full rounded-lg px-3 py-2 text-sm outline-none transition-all;
+    background-color: var(--card-soft);
+    border: 1px solid var(--card-border);
+    color: var(--text);
+  }
+  .input-base:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-glow);
+  }
+  .input-base::placeholder {
+    color: var(--muted);
+  }
+
+  /* ---------- 分类标签 ---------- */
+  .chip {
+    @apply shrink-0 cursor-pointer whitespace-nowrap rounded-full px-4 py-1.5 text-sm transition-all;
+    background: var(--btn-gray);
+    color: var(--text);
+    border: 1px solid transparent;
+  }
+  .chip:hover {
+    border-color: var(--primary-glow);
+    color: var(--primary);
+  }
+  .chip-active {
+    background: linear-gradient(135deg, var(--primary-hov), var(--primary));
+    color: #fff !important;
+    box-shadow: 0 2px 10px var(--primary-glow);
+  }
+
+  /* ---------- 页面切换动画 ---------- */
+  .page-enter {
+    animation: fadeInUp 0.3s cubic-bezier(0.25, 0.8, 0.35, 1);
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------- toast 动画 ---------- */
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.toast-item {
+  animation: toastIn 0.25s ease;
+}
+
+/* ---------- 弹窗动画 ---------- */
+@keyframes dialogIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.dialog-panel-anim {
+  animation: dialogIn 0.22s cubic-bezier(0.25, 0.8, 0.35, 1);
+}
+
+/* spinner */
+.spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--card-border);
+  border-top-color: var(--primary);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 减少动态效果：关闭所有装饰动画 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 细滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(120 130 150 / 0.35);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 隐藏横向滚动条样式保留滚动能力 */
+.no-scrollbar::-webkit-scrollbar {
+  height: 4px;
+}
+.no-scrollbar::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+.no-scrollbar:hover::-webkit-scrollbar-thumb {
+  background: rgb(120 130 150 / 0.3);
+}

@@ -1,0 +1,13 @@
+LIBRARY wv2bridge
+EXPORTS
+    WV2_Init
+    WV2_Resize
+    WV2_Post
+    WV2_Ready
+    WV2_Destroy
+    WV2_Browse
+    WV2_PendingAction
+    WV2_Field
+    WV2_Derive
+    WV2_RegisterHandler
+    BRIDGE_MakeThunk
