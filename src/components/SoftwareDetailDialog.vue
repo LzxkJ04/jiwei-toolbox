@@ -8,6 +8,7 @@ import Dialog from "./ui/Dialog.vue";
 import Button from "./ui/Button.vue";
 import Badge from "./ui/Badge.vue";
 import type { SoftwareItem } from "../lib/tauri";
+import { openPath } from "../lib/tauri";
 import { useSoftwareStore } from "../stores/software";
 import { useFavoritesStore } from "../stores/favorites";
 import { useTasksStore } from "../stores/tasks";
@@ -86,8 +87,16 @@ function addToQueue() {
 }
 
 // TODO(后端化): 后端提供 open_path / 启动进程命令后，改为直接以 install_location 启动软件
-function openSoftware() {
-  toast("暂不支持应用内直接启动，请通过开始菜单或桌面快捷方式打开该软件", "info");
+async function openSoftware() {
+  const loc = (installedApp.value as Record<string, unknown> | null)?.install_location as string | undefined;
+  if (loc) {
+    const ok = await openPath(loc);
+    if (ok !== null) {
+      toast("已在资源管理器中打开安装目录", "success");
+      return;
+    }
+  }
+  toast("未找到安装目录，请通过开始菜单或桌面快捷方式打开该软件", "warning");
 }
 </script>
 

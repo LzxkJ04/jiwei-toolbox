@@ -6,6 +6,7 @@ pub mod common;
 pub mod dirs;
 pub mod drivers;
 pub mod hardware;
+pub mod inventory;
 pub mod license;
 pub mod logs;
 pub mod software;

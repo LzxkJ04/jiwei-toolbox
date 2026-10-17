@@ -1,6 +1,5 @@
 <script setup lang="ts">
-// TODO(后端化): 清单备份当前为纯前端方案（localStorage 持久化 + JSON 文件导入导出），
-// 后续后端提供 software-inventory 交互命令（写入 data\备份导出\*.json）后迁移。
+// 清单备份：后端持久化（data\备份导出\*.jwinv.json）；导出/导入 JSON 文件用于跨电脑迁移。
 import { computed, onMounted, ref } from "vue";
 import { Download, FileUp, ListRestart, Pencil, RefreshCw, Save, Trash2 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
@@ -14,52 +13,26 @@ import Checkbox from "../components/ui/Checkbox.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import Dialog from "../components/ui/Dialog.vue";
 import ConfirmDialog from "../components/ui/ConfirmDialog.vue";
-import { getAutoBackupInventory, listInstalled, setAutoBackupInventory } from "../lib/tauri";
+import {
+  getAutoBackupInventory,
+  listInstalled,
+  setAutoBackupInventory,
+  saveInventory,
+  listInventories,
+  loadInventoryDoc,
+  deleteInventory,
+  renameInventory,
+  type InventoryAppRef,
+  type InventoryMeta,
+} from "../lib/tauri";
 import { useSoftwareStore } from "../stores/software";
 import { formatBytes } from "../lib/utils";
 import { toast } from "../lib/toast";
 
 const store = useSoftwareStore();
 
-/* ---- 清单备份模型（localStorage 持久化） ---- */
-interface InventoryApp {
-  name: string;
-  version: string;
-  publisher: string;
-  /** 注册表卸载入口（list_installed 未提供 install_location，降级记录卸载器与注册表键） */
-  uninstaller: string;
-  key: string;
-}
-interface InventoryBackup {
-  id: string;
-  name: string;
-  /** ISO 时间 */
-  time: string;
-  apps: InventoryApp[];
-}
-
-const LS_KEY = "jw-backup-inventories";
-
-function loadInventories(): InventoryBackup[] {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.filter((b) => b && typeof b.id === "string") : [];
-  } catch {
-    return [];
-  }
-}
-function saveInventories(list: InventoryBackup[]) {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify(list));
-  } catch {
-    toast("本地存储写入失败，清单可能无法持久化", "error");
-  }
-}
-
 /* ---- 左栏：本机软件清单 ---- */
-const apps = ref<{ name: string; version: string; publisher: string; uninstaller: string; key: string }[] | null>(null);
+const apps = ref<InventoryAppRef[] | null>(null);
 const scanning = ref(false);
 const appSearch = ref("");
 const appChecked = ref(new Set<string>());
@@ -68,7 +41,7 @@ async function scanInstalled() {
   scanning.value = true;
   const list = await listInstalled();
   apps.value = (list ?? []).map((a) => ({
-    name: a.name, version: a.version, publisher: a.publisher, uninstaller: a.uninstaller, key: a.key,
+    name: a.name, version: a.version, publisher: a.publisher, install_location: a.install_location || "",
   }));
   scanning.value = false;
 }
@@ -103,7 +76,7 @@ function openCreate() {
   showCreate.value = true;
 }
 
-function confirmCreate() {
+async function confirmCreate() {
   const name = createName.value.trim();
   if (!name) {
     toast("请填写备份名称", "warning");
@@ -111,43 +84,40 @@ function confirmCreate() {
   }
   saving.value = true;
   const selected = (apps.value ?? []).filter((a) => appChecked.value.has(a.name));
-  const list = loadInventories();
-  list.unshift({
-    id: `inv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    name,
-    time: new Date().toISOString(),
-    apps: selected,
-  });
-  saveInventories(list);
+  const res = await saveInventory(name, selected);
   saving.value = false;
+  if (res === null) {
+    toast("保存失败（名称非法或磁盘错误）", "error");
+    return;
+  }
   showCreate.value = false;
   appChecked.value = new Set();
+  refreshInventories();
   toast(`备份清单「${name}」已保存（${selected.length} 个软件）`, "success");
 }
 
 /* ---- 右栏：历史备份文件 ---- */
-const inventories = ref<InventoryBackup[]>([]);
+const inventories = ref<InventoryMeta[]>([]);
 
 function refreshInventories() {
-  inventories.value = loadInventories();
-}
-
-function invSize(b: InventoryBackup): string {
-  try {
-    return formatBytes(JSON.stringify(b.apps).length);
-  } catch {
-    return "--";
-  }
+  listInventories().then((v) => {
+    inventories.value = v ?? [];
+  });
 }
 
 /** 加载清单：按名称匹配软件库并勾选（跨页联动，软件库页可见） */
-async function loadInventory(b: InventoryBackup) {
+async function loadInventory(b: InventoryMeta) {
+  const doc = await loadInventoryDoc(b.name);
+  if (doc === null) {
+    toast("清单文件损坏或不存在", "error");
+    return;
+  }
   await store.load();
   const items = store.items ?? [];
   const lower = (s: string) => (s || "").trim().toLowerCase();
   const matched: string[] = [];
   let miss = 0;
-  for (const a of b.apps) {
+  for (const a of doc.apps) {
     const n = lower(a.name);
     if (!n) continue;
     const hit = items.find((i) => {
@@ -169,9 +139,14 @@ async function loadInventory(b: InventoryBackup) {
 }
 
 /** 导出清单：JSON 文件下载（跨电脑迁移用） */
-function exportInventory(b: InventoryBackup) {
+async function exportInventory(b: InventoryMeta) {
+  const doc = await loadInventoryDoc(b.name);
+  if (doc === null) {
+    toast("清单文件损坏或不存在", "error");
+    return;
+  }
   const data = JSON.stringify(
-    { type: "jw-software-inventory", name: b.name, time: b.time, apps: b.apps },
+    { type: "jw-software-inventory", name: doc.name, time: doc.created, apps: doc.apps },
     null,
     2
   );
@@ -186,47 +161,46 @@ function exportInventory(b: InventoryBackup) {
 
 /* ---- 重命名 ---- */
 const showRename = ref(false);
-const renameTarget = ref<InventoryBackup | null>(null);
+const renameTarget = ref<InventoryMeta | null>(null);
 const renameName = ref("");
 
-function openRename(b: InventoryBackup) {
+function openRename(b: InventoryMeta) {
   renameTarget.value = b;
   renameName.value = b.name;
   showRename.value = true;
 }
 
-function confirmRename() {
+async function confirmRename() {
   const name = renameName.value.trim();
   if (!name || !renameTarget.value) {
     toast("请填写名称", "warning");
     return;
   }
-  const list = loadInventories();
-  const hit = list.find((x) => x.id === renameTarget.value!.id);
-  if (hit) {
-    hit.name = name;
-    saveInventories(list);
-    refreshInventories();
-    toast("已重命名", "success");
+  const ok = await renameInventory(renameTarget.value.name, name);
+  if (ok === null) {
+    toast("重命名失败（目标名称已存在或名称非法）", "error");
+    return;
   }
+  refreshInventories();
+  toast("已重命名", "success");
   showRename.value = false;
 }
 
 /* ---- 删除（确认） ---- */
 const showDelete = ref(false);
-const deleteTarget = ref<InventoryBackup | null>(null);
+const deleteTarget = ref<InventoryMeta | null>(null);
 
-function openDelete(b: InventoryBackup) {
+function openDelete(b: InventoryMeta) {
   deleteTarget.value = b;
   showDelete.value = true;
 }
 
-function confirmDelete() {
+async function confirmDelete() {
   if (!deleteTarget.value) return;
-  const list = loadInventories().filter((x) => x.id !== deleteTarget.value!.id);
-  saveInventories(list);
+  await deleteInventory(deleteTarget.value.name);
   refreshInventories();
   toast("备份清单已删除", "info");
+  showDelete.value = false;
 }
 
 /* ---- 全局设置：自动备份清单 ---- */
@@ -280,7 +254,7 @@ async function onAutoBackup(v: boolean) {
         <div v-else class="max-h-[26rem] flex-1 space-y-1 overflow-y-auto pr-1">
           <label
             v-for="a in filteredApps"
-            :key="a.key || a.name"
+            :key="a.name"
             class="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--btn-gray)]"
           >
             <Checkbox :checked="appChecked.has(a.name)" @update:checked="(v) => setAppChecked(a.name, !!v)" />
@@ -318,15 +292,15 @@ async function onAutoBackup(v: boolean) {
         <div v-else class="max-h-[26rem] flex-1 space-y-2.5 overflow-y-auto pr-1">
           <div
             v-for="b in inventories"
-            :key="b.id"
+            :key="b.name"
             class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3.5"
           >
             <div class="flex flex-wrap items-center gap-2">
               <span class="truncate font-medium">{{ b.name }}</span>
-              <Badge tone="gray">{{ b.apps.length }} 个软件</Badge>
-              <Badge tone="gray">{{ invSize(b) }}</Badge>
+              <Badge tone="gray">{{ b.count }} 个软件</Badge>
+              <Badge tone="gray">{{ formatBytes(b.size) }}</Badge>
             </div>
-            <p class="mt-1 text-xs text-[var(--muted)]">{{ new Date(b.time).toLocaleString() }}</p>
+            <p class="mt-1 text-xs text-[var(--muted)]">{{ b.created }}</p>
             <div class="mt-2.5 flex flex-wrap items-center gap-1.5">
               <Button variant="primary" size="sm" @click="loadInventory(b)">
                 <FileUp class="h-3.5 w-3.5" /> 加载清单

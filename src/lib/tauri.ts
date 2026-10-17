@@ -49,6 +49,7 @@ export interface InstalledApp {
   uninstaller: string;
   key: string;
   size_estimate: number;
+  install_location?: string;
 }
 
 export interface ResidualItem {
@@ -535,3 +536,35 @@ export interface ExistingInstall {
 }
 /** 检测已有安装（注册表 Dirs + 版本号），供安装向导预填 */
 export const instDetectExisting = () => tryCall<ExistingInstall>("inst_detect_existing");
+
+// —— 软件清单备份（后端持久化：data\备份导出\*.jwinv.json）——
+export interface InventoryAppRef {
+  name: string;
+  version: string;
+  publisher: string;
+  install_location?: string;
+}
+export interface InventoryMeta {
+  name: string;
+  file: string;
+  created: string;
+  count: number;
+  size: number;
+  mtime: number;
+}
+export interface InventoryDoc {
+  kind: string;
+  name: string;
+  created: string;
+  apps: InventoryAppRef[];
+}
+export const saveInventory = (name: string, apps: InventoryAppRef[]) =>
+  tryCall<{ file: string; count: number }>("save_inventory", { name, apps });
+export const listInventories = () => tryCall<InventoryMeta[]>("list_inventories");
+export const loadInventoryDoc = (name: string) => tryCall<InventoryDoc>("load_inventory", { name });
+export const deleteInventory = (name: string) => tryCall<null>("delete_inventory", { name });
+export const renameInventory = (oldName: string, newName: string) =>
+  tryCall<null>("rename_inventory", { oldName, newName });
+
+/** 用系统默认方式打开路径（目录=资源管理器，文件=关联程序） */
+export const openPath = (path: string) => tryCall<null>("open_path", { path });
