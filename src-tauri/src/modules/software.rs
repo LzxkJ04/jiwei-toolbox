@@ -919,6 +919,41 @@ mod e2e_download_tests {
         let _ = std::fs::remove_file(&dest);
     }
 
+
+    #[test]
+    fn concurrent_downloads_shared_limiter() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let body: Vec<u8> = (0..30_000u32).map(|i| (i % 249) as u8).collect();
+        let (url1, _) = spawn_http_server(body.clone());
+        let (url2, _) = spawn_http_server(body.clone());
+        let dest1 = tmpfile("conc1.bin");
+        let dest2 = tmpfile("conc2.bin");
+        let _ = std::fs::remove_file(&dest1);
+        let _ = std::fs::remove_file(&dest2);
+        // 两线程共享 8KB/s 限速器：总 60KB 应 >= 6s（共享限速正确性）
+        let limiter = std::sync::Arc::new(crate::taskopts::RateLimiter::new(8 * 1024));
+        let h1 = std::thread::spawn({
+            let url = url1.clone();
+            let dest = dest1.clone();
+            let lim = limiter.clone();
+            move || download_with_resume(&url, &dest, None, "c1", Some(&*lim))
+        });
+        let h2 = std::thread::spawn({
+            let url = url2.clone();
+            let dest = dest2.clone();
+            let lim = limiter.clone();
+            move || download_with_resume(&url, &dest, None, "c2", Some(&*lim))
+        });
+        let r1 = h1.join().unwrap();
+        let r2 = h2.join().unwrap();
+        r1.unwrap();
+        r2.unwrap();
+        assert_eq!(std::fs::read(&dest1).unwrap(), body);
+        assert_eq!(std::fs::read(&dest2).unwrap(), body);
+        let _ = std::fs::remove_file(&dest1);
+        let _ = std::fs::remove_file(&dest2);
+    }
+
     #[test]
     fn cancel_aborts() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());

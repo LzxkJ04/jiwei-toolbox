@@ -129,7 +129,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             "tray-show" => show_main_window(app),
             "tray-install" => {
                 show_main_window(app);
-                let _ = app.emit("navigate", serde_json::json!({ "page": "software" }));
+                let _ = app.emit("navigate", serde_json::json!({ "page": "library" }));
             }
             "tray-pause" => software::pause_tasks(app.clone()),
             "tray-resume" => software::resume_tasks(app.clone()),
