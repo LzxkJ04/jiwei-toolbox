@@ -4,6 +4,7 @@ import TitleBar from "./components/TitleBar.vue";
 import SideNav from "./components/SideNav.vue";
 import ToastHost from "./components/ui/ToastHost.vue";
 import ConfirmDialog from "./components/ui/ConfirmDialog.vue";
+import CommandPalette from "./components/CommandPalette.vue";
 import { useThemeStore } from "./stores/theme";
 import { useRouteStore } from "./stores/route";
 import { useFavoritesStore } from "./stores/favorites";
@@ -21,6 +22,9 @@ import LocalSoftware from "./views/LocalSoftware.vue";
 import TaskQueue from "./views/TaskQueue.vue";
 import BackupView from "./views/BackupView.vue";
 import HardwareView from "./views/HardwareView.vue";
+import SysMonitorView from "./views/SysMonitorView.vue";
+import DiskSpaceView from "./views/DiskSpaceView.vue";
+import QuickToolsView from "./views/QuickToolsView.vue";
 import SysToolsView from "./views/SysToolsView.vue";
 import LicenseView from "./views/LicenseView.vue";
 import LogsView from "./views/LogsView.vue";
@@ -39,6 +43,9 @@ const views: Record<string, unknown> = {
   tasks: TaskQueue,
   backup: BackupView,
   hardware: HardwareView,
+  monitor: SysMonitorView,
+  diskspace: DiskSpaceView,
+  quicktools: QuickToolsView,
   systools: SysToolsView,
   license: LicenseView,
   logs: LogsView,
@@ -90,6 +97,7 @@ onMounted(async () => {
   <!-- 主程序 -->
   <div v-else class="flex h-full flex-col overflow-hidden">
     <ToastHost />
+    <CommandPalette />
     <TitleBar />
     <div class="flex min-h-0 flex-1">
       <SideNav />

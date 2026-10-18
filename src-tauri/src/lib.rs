@@ -24,7 +24,7 @@ fn greet(name: &str) -> String {
     format!("你好, {}! 来自极维工具箱后端。", name)
 }
 
-use modules::{appicon, backup, cache, common, dirs, drivers, hardware, inventory, license, logs, software, systools, taskopts, uninstall, updater, webview2};
+use modules::{appicon, backup, cache, common, dirs, diskspace, drivers, hardware, inventory, license, logs, software, sysmon, sysquick, systools, taskopts, uninstall, updater, webview2};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{MenuBuilder, MenuItem, PredefinedMenuItem},
@@ -232,6 +232,27 @@ pub fn run() {
             hardware::gpu_burn_start,
             hardware::gpu_burn_stop,
             hardware::mem_test_start,
+            // 系统监控：实时占用 / 进程 / 网络诊断
+            sysmon::sys_usage,
+            sysmon::list_processes,
+            sysmon::kill_pid,
+            sysmon::net_adapters,
+            sysmon::ping_host,
+            sysmon::dns_lookup,
+            sysmon::flush_dns,
+            // 磁盘空间分析
+            diskspace::disk_overview,
+            diskspace::dir_usage,
+            diskspace::scan_large_files,
+            diskspace::cancel_scan,
+            diskspace::delete_space_item,
+            diskspace::reveal_path,
+            diskspace::empty_dir_contents,
+            // 快捷工具：端口 / 系统入口 / 定时关机
+            sysquick::list_ports,
+            sysquick::open_system_tool,
+            sysquick::schedule_shutdown,
+            sysquick::cancel_shutdown,
             // 系统工具
             systools::list_startup,
             systools::toggle_startup,

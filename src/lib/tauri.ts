@@ -164,6 +164,69 @@ export interface HwUsage {
   mem_total: number;
 }
 
+/** 系统监控：实时占用 + 网络速率 */
+export interface SysUsage {
+  cpu_pct: number;
+  mem_used: number;
+  mem_total: number;
+  swap_used: number;
+  swap_total: number;
+  /** 每秒接收字节 */
+  down_bps: number;
+  /** 每秒发送字节 */
+  up_bps: number;
+  processes: number;
+  /** 系统已运行秒数 */
+  uptime: number;
+}
+
+export interface ProcRow {
+  pid: number;
+  name: string;
+  /** 占系统总 CPU 的百分比 */
+  cpu: number;
+  mem: number;
+  exe: string;
+  cmd: string;
+}
+
+export interface NetAdapter {
+  alias: string;
+  ipv4: string;
+  gateway: string;
+  dns: string;
+  mac: string;
+  speed: string;
+}
+
+export interface PingResult {
+  ok: boolean;
+  sent: number;
+  lost: number;
+  loss_pct: number;
+  min: number | null;
+  avg: number | null;
+  max: number | null;
+}
+
+export interface SpaceEntry {
+  name: string;
+  path: string;
+  size: number;
+  /** "dir" | "file" */
+  kind: string;
+  files: number;
+}
+
+export interface DiskOverview {
+  mount: string;
+  name: string;
+  fs: string;
+  total: number;
+  free: number;
+  used: number;
+}
+
 export interface DiskSpeed {
   read_mbps: number;
   write_mbps: number;
@@ -430,6 +493,47 @@ export const killProcess = (pids: number[]) => tryCall<KillResult>("kill_process
 export const hwInfo = () => tryCall<HwInfo>("hw_info");
 /** 实时占用。轮询用，失败不弹 toast */
 export const hwUsage = () => invoke<HwUsage>("hw_usage").catch(() => null);
+
+/* ---- 系统监控 ---- */
+
+/** 实时占用与网络速率。轮询用，失败不弹 toast */
+export const sysUsage = () => invoke<SysUsage>("sys_usage").catch(() => null);
+export const listProcesses = () => tryCall<ProcRow[]>("list_processes");
+export const killPid = (pid: number) => invoke<null>("kill_pid", { pid });
+export const netAdapters = () => tryCall<NetAdapter[]>("net_adapters");
+export const pingHost = (host: string) => invoke<PingResult>("ping_host", { host });
+export const dnsLookup = (host: string) => invoke<string[]>("dns_lookup", { host });
+export const flushDns = () => invoke<string>("flush_dns");
+
+/* ---- 磁盘空间 ---- */
+
+export const diskOverview = () => tryCall<DiskOverview[]>("disk_overview");
+export const dirUsage = (path: string, limit = 40) =>
+  invoke<SpaceEntry[]>("dir_usage", { path, limit });
+export const scanLargeFiles = (path: string, minMb: number, limit = 200) =>
+  invoke<SpaceEntry[]>("scan_large_files", { path, minMb, limit });
+export const cancelScan = () => invoke<null>("cancel_scan").catch(() => null);
+export const deleteSpaceItem = (path: string) => invoke<null>("delete_space_item", { path });
+export const revealPath = (path: string) => invoke<null>("reveal_path", { path });
+export const emptyDirContents = (path: string) => invoke<number>("empty_dir_contents", { path });
+
+/* ---- 快捷工具 ---- */
+
+export interface PortRow {
+  proto: string;
+  addr: string;
+  port: number;
+  pid: number;
+  name: string;
+}
+
+export const listPorts = () => tryCall<PortRow[]>("list_ports");
+export const openSystemTool = (id: string) => invoke<string>("open_system_tool", { id });
+export const scheduleShutdown = (seconds: number, mode: string) =>
+  invoke<null>("schedule_shutdown", { seconds, mode });
+export const cancelShutdown = () => invoke<null>("cancel_shutdown");
+
+
 export const cpuBurnStart = (seconds: number) => tryCall<null>("cpu_burn_start", { seconds });
 export const cpuBurnStop = () => tryCall<null>("cpu_burn_stop");
 export const diskSpeed = (path: string) => tryCall<DiskSpeed>("disk_speed", { path });
