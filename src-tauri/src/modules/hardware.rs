@@ -104,6 +104,48 @@ fn mem_type_name(code: u64) -> &'static str {
     }
 }
 
+/// Win32_PhysicalMemory.FormFactor。0/未知返回空串。
+fn form_factor_name(code: u64) -> &'static str {
+    match code {
+        8 => "DIMM",
+        9 => "FB-DIMM",
+        12 => "SO-DIMM",
+        _ => "",
+    }
+}
+
+/// Win32_Processor.Architecture。调用方须先确认字段存在，0 是合法的 x86。
+fn cpu_arch_name(code: u64) -> &'static str {
+    match code {
+        0 => "x86",
+        5 => "ARM",
+        9 => "x64",
+        12 => "ARM64",
+        _ => "",
+    }
+}
+
+fn cpu_vendor_name(raw: &str) -> String {
+    match raw.trim() {
+        "GenuineIntel" => "Intel".to_string(),
+        "AuthenticAMD" => "AMD".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn json_bool(v: &serde_json::Value, key: &str) -> Option<bool> {
+    match v.get(key) {
+        Some(serde_json::Value::Bool(b)) => Some(*b),
+        Some(serde_json::Value::Number(n)) => Some(n.as_f64().unwrap_or(0.0) != 0.0),
+        Some(serde_json::Value::String(s)) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// 远程/虚拟显示设备没有真实显存，不能和独显混在一起看起来像「没读到」。
 fn is_virtual_gpu(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
@@ -247,26 +289,57 @@ fn cpu_name_registry() -> String {
         .join(" ")
 }
 
-/// 一次 CIM 查询拿齐 CPU / 主板 / BIOS / 显卡 / 磁盘 / 内存。
+/// 一次 CIM 查询拿齐 CPU / 主板 / BIOS / 显卡 / 磁盘 / 内存 / 系统。
 /// 注册表 BIOS 键在不少机器上是空的，不能只靠它。
+/// 虚拟化字段保持 $null，不能强转 bool，否则「读不到」会变成「未开启」。
 fn cim_snapshot() -> Option<serde_json::Value> {
     ps_json(
         r#"
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-$bb = Get-CimInstance Win32_BaseBoard
-$bios = Get-CimInstance Win32_BIOS
+$bb = Get-CimInstance Win32_BaseBoard | Select-Object -First 1
+$bios = Get-CimInstance Win32_BIOS | Select-Object -First 1
+$os = Get-CimInstance Win32_OperatingSystem | Select-Object -First 1
 $date = ''
 if ($bios.ReleaseDate) { try { $date = Get-Date $bios.ReleaseDate -Format 'yyyy-MM-dd' } catch { $date = '' } }
+$virt = $null
+if ($null -ne $cpu.VirtualizationFirmwareEnabled) { $virt = [bool]$cpu.VirtualizationFirmwareEnabled }
 $phys = @()
-try { $phys = @(Get-PhysicalDisk | Select-Object FriendlyName,MediaType,BusType,HealthStatus,Size) } catch {}
+try { $phys = @(Get-PhysicalDisk | Select-Object FriendlyName,MediaType,BusType,HealthStatus,Size,SerialNumber) } catch {}
+$gpus = @(Get-CimInstance Win32_VideoController | ForEach-Object {
+  $dd = ''
+  if ($_.DriverDate) { try { $dd = Get-Date $_.DriverDate -Format 'yyyy-MM-dd' } catch { $dd = [string]$_.DriverDate } }
+  @{
+    Name = [string]$_.Name
+    AdapterRAM = $_.AdapterRAM
+    DriverVersion = [string]$_.DriverVersion
+    DriverDate = $dd
+    Width = $_.CurrentHorizontalResolution
+    Height = $_.CurrentVerticalResolution
+    Refresh = $_.CurrentRefreshRate
+    Vendor = [string]$_.AdapterCompatibility
+  }
+})
 @{
-  cpu = @{ name = [string]$cpu.Name; cores = $cpu.NumberOfCores; threads = $cpu.NumberOfLogicalProcessors; mhz = $cpu.MaxClockSpeed }
-  board = @{ manufacturer = [string]$bb.Manufacturer; product = [string]$bb.Product; version = [string]$bb.Version }
-  bios = @{ version = [string]$bios.SMBIOSBIOSVersion; date = [string]$date }
-  gpus = @(Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM,DriverVersion)
-  disks = @(Get-CimInstance Win32_DiskDrive | Select-Object Model,Size,InterfaceType)
+  cpu = @{
+    name = [string]$cpu.Name
+    cores = $cpu.NumberOfCores
+    threads = $cpu.NumberOfLogicalProcessors
+    mhz = $cpu.MaxClockSpeed
+    current_mhz = $cpu.CurrentClockSpeed
+    l2_kb = $cpu.L2CacheSize
+    l3_kb = $cpu.L3CacheSize
+    socket = [string]$cpu.SocketDesignation
+    vendor = [string]$cpu.Manufacturer
+    arch = $cpu.Architecture
+    virtualization = $virt
+  }
+  board = @{ manufacturer = [string]$bb.Manufacturer; product = [string]$bb.Product; version = [string]$bb.Version; serial = [string]$bb.SerialNumber }
+  bios = @{ vendor = [string]$bios.Manufacturer; version = [string]$bios.SMBIOSBIOSVersion; date = [string]$date }
+  os = @{ caption = [string]$os.Caption; version = [string]$os.Version; build = [string]$os.BuildNumber; arch = [string]$os.OSArchitecture }
+  gpus = $gpus
+  disks = @(Get-CimInstance Win32_DiskDrive | Select-Object Model,Size,InterfaceType,SerialNumber,FirmwareRevision)
   phys = $phys
-  mem = @(Get-CimInstance Win32_PhysicalMemory | Select-Object Manufacturer,DeviceLocator,Speed,Capacity,SMBIOSMemoryType)
+  mem = @(Get-CimInstance Win32_PhysicalMemory | Select-Object Manufacturer,DeviceLocator,BankLabel,PartNumber,Speed,ConfiguredClockSpeed,Capacity,SMBIOSMemoryType,FormFactor,DataWidth)
 } | ConvertTo-Json -Compress -Depth 6
 "#,
     )
@@ -310,6 +383,30 @@ fn pick_vram_mb(adapter_ram: f64, registry_mb: u64) -> u64 {
     vram_mb(adapter_ram)
 }
 
+fn gpu_value(
+    name: String,
+    vram: u64,
+    driver: String,
+    virtual_display: bool,
+    width: u64,
+    height: u64,
+    refresh: u64,
+    driver_date: String,
+    vendor: String,
+) -> serde_json::Value {
+    json!({
+        "name": name,
+        "vram": vram,
+        "driver": driver,
+        "virtual": virtual_display,
+        "width": width,
+        "height": height,
+        "refresh": refresh,
+        "driver_date": driver_date,
+        "vendor": vendor,
+    })
+}
+
 fn gpus_from_snapshot(
     rows: &[serde_json::Value],
     reg: &std::collections::HashMap<String, (u64, String, String)>,
@@ -327,24 +424,34 @@ fn gpus_from_snapshot(
             driver = extra.map(|x| x.1.clone()).unwrap_or_default();
         }
         let vram = pick_vram_mb(jnum(g, "AdapterRAM", 0.0), registry_mb);
-        out.push(json!({
-            "name": name,
-            "vram": vram,
-            "driver": driver,
-            "virtual": is_virtual_gpu(&name),
-        }));
+        out.push(gpu_value(
+            name.clone(),
+            vram,
+            driver,
+            is_virtual_gpu(&name),
+            json_u64(g, "Width"),
+            json_u64(g, "Height"),
+            json_u64(g, "Refresh"),
+            parse_wmi_date(&json_text(g, "DriverDate")),
+            json_text(g, "Vendor"),
+        ));
     }
     if out.is_empty() {
         for (_key, (mb, driver, name)) in reg {
             if *mb == 0 || is_virtual_gpu(name) {
                 continue;
             }
-            out.push(json!({
-                "name": name,
-                "vram": mb,
-                "driver": driver,
-                "virtual": false,
-            }));
+            out.push(gpu_value(
+                name.clone(),
+                *mb,
+                driver.clone(),
+                false,
+                0,
+                0,
+                0,
+                String::new(),
+                String::new(),
+            ));
         }
     }
     let mut best: Vec<serde_json::Value> = Vec::new();
@@ -382,12 +489,21 @@ fn disks_from_snapshot(rows: &[serde_json::Value], phys: &[serde_json::Value]) -
             let health = matched
                 .map(|p| map_storage_enum("health", &json_text(p, "HealthStatus")))
                 .unwrap_or_default();
+            let mut serial = json_text(d, "SerialNumber").trim().to_string();
+            if serial.is_empty() {
+                serial = matched
+                    .map(|p| json_text(p, "SerialNumber").trim().to_string())
+                    .unwrap_or_default();
+            }
+            let firmware = json_text(d, "FirmwareRevision").trim().to_string();
             json!({
                 "model": if model.is_empty() { "未知磁盘".to_string() } else { model },
                 "size": size,
                 "bus": bus,
                 "media": media,
                 "health": health,
+                "serial": serial,
+                "firmware": firmware,
             })
         })
         .collect()
@@ -396,19 +512,67 @@ fn disks_from_snapshot(rows: &[serde_json::Value], phys: &[serde_json::Value]) -
 fn memory_from_snapshot(rows: &[serde_json::Value]) -> Vec<serde_json::Value> {
     rows.iter()
         .map(|m| {
-            let manufacturer = json_text(m, "Manufacturer");
-            let slot = json_text(m, "DeviceLocator");
+            let manufacturer = json_text(m, "Manufacturer").trim().to_string();
+            let slot = json_text(m, "DeviceLocator").trim().to_string();
             let kind = mem_type_name(json_u64(m, "SMBIOSMemoryType"));
+            let part = json_text(m, "PartNumber").trim().to_string();
             json!({
                 "manufacturer": manufacturer,
                 "capacity_gb": (json_u64(m, "Capacity") as f64 / 1073741824.0 * 10.0).round() / 10.0,
                 "speed": json_u64(m, "Speed"),
+                "configured_mhz": json_u64(m, "ConfiguredClockSpeed"),
                 "slot": slot,
+                "bank": json_text(m, "BankLabel").trim(),
+                "part_number": part,
+                "form_factor": form_factor_name(json_u64(m, "FormFactor")),
+                "data_width": json_u64(m, "DataWidth"),
                 "type": kind,
             })
         })
         .filter(|m| m["capacity_gb"].as_f64().unwrap_or(0.0) > 0.0 || !json_text(m, "manufacturer").is_empty())
         .collect()
+}
+
+fn clean_id(s: String) -> String {
+    if nonempty(&s) { s } else { String::new() }
+}
+
+fn cpu_arch_label(cpu: &serde_json::Value) -> String {
+    match cpu.get("arch") {
+        Some(serde_json::Value::Number(_)) | Some(serde_json::Value::String(_)) => {
+            cpu_arch_name(json_u64(cpu, "arch")).to_string()
+        }
+        _ => String::new(),
+    }
+}
+
+fn cpu_from_snapshot(
+    cpu: &serde_json::Value,
+    fallback_name: &str,
+    fallback_cores: u64,
+    fallback_threads: u64,
+) -> serde_json::Value {
+    let from_cim = json_text(cpu, "name");
+    let name = if nonempty(&from_cim) {
+        from_cim
+    } else {
+        fallback_name.trim().to_string()
+    };
+    let cores = json_u64(cpu, "cores");
+    let threads = json_u64(cpu, "threads");
+    json!({
+        "name": name,
+        "vendor": cpu_vendor_name(&json_text(cpu, "vendor")),
+        "arch": cpu_arch_label(cpu),
+        "socket": clean_id(json_text(cpu, "socket")),
+        "cores": if cores > 0 { cores } else { fallback_cores },
+        "threads": if threads > 0 { threads } else { fallback_threads },
+        "mhz": json_u64(cpu, "mhz"),
+        "current_mhz": json_u64(cpu, "current_mhz"),
+        "l2_kb": json_u64(cpu, "l2_kb"),
+        "l3_kb": json_u64(cpu, "l3_kb"),
+        "virtualization": json_bool(cpu, "virtualization"),
+    })
 }
 
 /// 硬件信息总览（CPU / 内存 / 主板 / BIOS / 显卡 / 磁盘 / 分区）
@@ -429,30 +593,29 @@ pub async fn hw_info() -> serde_json::Value {
 
     let snap = cim_snapshot().unwrap_or(serde_json::Value::Null);
     let reg_gpu = registry_gpu_extra();
+    let cpu_node = snap.get("cpu").cloned().unwrap_or(serde_json::Value::Null);
+    let board_node = snap.get("board").cloned().unwrap_or(serde_json::Value::Null);
+    let bios_node = snap.get("bios").cloned().unwrap_or(serde_json::Value::Null);
+    let os_node = snap.get("os").cloned().unwrap_or(serde_json::Value::Null);
 
-    let cpu_name = {
-        let from_cim = json_text(&snap["cpu"], "name");
-        if nonempty(&from_cim) {
-            from_cim
-        } else {
-            let from_reg = cpu_name_registry();
-            if nonempty(&from_reg) { from_reg } else { sys_brand }
-        }
+    let fallback_name = {
+        let from_reg = cpu_name_registry();
+        if nonempty(&from_reg) { from_reg } else { sys_brand }
     };
-    let cores = json_u64(&snap["cpu"], "cores");
-    let threads = json_u64(&snap["cpu"], "threads");
-    let mhz = json_u64(&snap["cpu"], "mhz");
+    let cpu = cpu_from_snapshot(&cpu_node, &fallback_name, sys_cores as u64, sys_threads as u64);
 
-    let board_mfr = json_text(&snap["board"], "manufacturer");
-    let board_product = json_text(&snap["board"], "product");
-    let board_ver = json_text(&snap["board"], "version");
+    let board_mfr = clean_id(json_text(&board_node, "manufacturer"));
+    let board_product = clean_id(json_text(&board_node, "product"));
+    let board_ver = clean_id(json_text(&board_node, "version"));
+    let board_serial = clean_id(json_text(&board_node, "serial"));
     let board = [board_mfr.as_str(), board_product.as_str(), board_ver.as_str()]
         .into_iter()
         .filter(|s| nonempty(s))
         .collect::<Vec<_>>()
         .join(" ");
-    let bios_ver = json_text(&snap["bios"], "version");
-    let bios_date = parse_wmi_date(&json_text(&snap["bios"], "date"));
+    let bios_vendor = clean_id(json_text(&bios_node, "vendor"));
+    let bios_ver = clean_id(json_text(&bios_node, "version"));
+    let bios_date = parse_wmi_date(&json_text(&bios_node, "date"));
 
     let gpus = gpus_from_snapshot(&as_array(snap.get("gpus").cloned()), &reg_gpu);
     let disks = disks_from_snapshot(
@@ -462,21 +625,56 @@ pub async fn hw_info() -> serde_json::Value {
     let memory_modules = memory_from_snapshot(&as_array(snap.get("mem").cloned()));
 
     json!({
-        "cpu": {
-            "name": cpu_name,
-            "cores": if cores > 0 { cores } else { sys_cores as u64 },
-            "threads": if threads > 0 { threads } else { sys_threads as u64 },
-            "mhz": mhz,
-        },
+        "cpu": cpu,
         "memory_total": memory_total,
         "memoryModules": memory_modules,
-        "motherboard": { "manufacturer": board_mfr, "product": board_product, "version": board_ver },
+        "motherboard": {
+            "manufacturer": board_mfr,
+            "product": board_product,
+            "version": board_ver,
+            "serial": board_serial,
+        },
         "board": board,
-        "bios": { "version": bios_ver, "date": bios_date },
+        "bios": { "vendor": bios_vendor, "version": bios_ver, "date": bios_date },
+        "os": {
+            "caption": json_text(&os_node, "caption").trim(),
+            "version": json_text(&os_node, "version").trim(),
+            "build": json_text(&os_node, "build").trim(),
+            "arch": json_text(&os_node, "arch").trim(),
+        },
         "gpus": gpus,
         "disks": disks,
         "volumes": volumes_info(),
     })
+}
+
+/// 轻量占用：CPU 需要两次采样才有值，页面轮询时复用同一份 System。
+fn sample_usage() -> serde_json::Value {
+    use sysinfo::System;
+    static SYS: Mutex<Option<System>> = Mutex::new(None);
+    let mut guard = SYS.lock().unwrap_or_else(|e| e.into_inner());
+    let sys = guard.get_or_insert_with(System::new);
+    sys.refresh_memory();
+    // 空列表时先把 CPU 建出来；占用要靠下一次轮询的差值才准。
+    if sys.cpus().is_empty() {
+        sys.refresh_cpu_all();
+    } else {
+        sys.refresh_cpu_usage();
+    }
+    let pct = sys.global_cpu_usage();
+    json!({
+        "cpu_pct": (pct * 10.0).round() / 10.0,
+        "mem_used": sys.used_memory(),
+        "mem_total": sys.total_memory(),
+    })
+}
+
+/// 实时 CPU / 内存占用。不走 WMI，供界面两三秒轮询。
+#[tauri::command]
+pub async fn hw_usage() -> serde_json::Value {
+    tauri::async_runtime::spawn_blocking(sample_usage)
+        .await
+        .unwrap_or_else(|_| json!({ "cpu_pct": 0.0, "mem_used": 0, "mem_total": 0 }))
 }
 
 // ---------- CPU 烤机 ----------
@@ -1009,8 +1207,11 @@ fn run_mem_test(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_virtual_gpu, map_storage_enum, mem_type_name, parse_wmi_date, pick_vram_mb, vram_mb, DiskSpeed,
+        cpu_arch_name, cpu_from_snapshot, cpu_vendor_name, disks_from_snapshot, form_factor_name,
+        gpus_from_snapshot, is_virtual_gpu, map_storage_enum, mem_type_name, memory_from_snapshot,
+        parse_wmi_date, pick_vram_mb, vram_mb, DiskSpeed,
     };
+    use serde_json::json;
 
     #[test]
     fn vram_bytes_to_mb() {
@@ -1064,5 +1265,111 @@ mod tests {
         assert_eq!(parse_wmi_date("2024-03-06"), "2024-03-06");
         assert_eq!(parse_wmi_date("/Date(1709683200000)/"), "2024-03-06");
         assert_eq!(parse_wmi_date("20240306000000.000000+000"), "2024-03-06");
+    }
+
+    #[test]
+    fn cpu_snapshot_keeps_cache_clock_and_virtualization() {
+        assert_eq!(cpu_vendor_name("GenuineIntel"), "Intel");
+        assert_eq!(cpu_vendor_name("AuthenticAMD"), "AMD");
+        assert_eq!(form_factor_name(8), "DIMM");
+        assert_eq!(form_factor_name(12), "SO-DIMM");
+        assert_eq!(cpu_arch_name(9), "x64");
+        assert_eq!(cpu_arch_name(12), "ARM64");
+
+        let raw = json!({
+            "name": "Intel Core i5-14600KF",
+            "cores": 14,
+            "threads": 20,
+            "mhz": 3500,
+            "current_mhz": 4700,
+            "l2_kb": 20480,
+            "l3_kb": 24576,
+            "socket": "U3E1",
+            "vendor": "GenuineIntel",
+            "arch": 9,
+            "virtualization": true
+        });
+        let v = cpu_from_snapshot(&raw, "fallback", 1, 1);
+        assert_eq!(v["name"], "Intel Core i5-14600KF");
+        assert_eq!(v["vendor"], "Intel");
+        assert_eq!(v["arch"], "x64");
+        assert_eq!(v["l3_kb"], 24576);
+        assert_eq!(v["current_mhz"], 4700);
+        assert_eq!(v["virtualization"], true);
+
+        let missing = cpu_from_snapshot(&json!({}), "fallback", 4, 8);
+        assert_eq!(missing["name"], "fallback");
+        assert_eq!(missing["arch"], "");
+        assert!(missing["virtualization"].is_null());
+    }
+
+    #[test]
+    fn memory_module_keeps_part_and_form() {
+        let rows = vec![json!({
+            "Manufacturer": "Samsung",
+            "DeviceLocator": "Controller0-DIMM1",
+            "BankLabel": "BANK 0",
+            "PartNumber": "M378A2K43EB1-CWE  ",
+            "Speed": 3200,
+            "ConfiguredClockSpeed": 3200,
+            "Capacity": 17179869184u64,
+            "SMBIOSMemoryType": 26,
+            "FormFactor": 8,
+            "DataWidth": 64
+        })];
+        let v = memory_from_snapshot(&rows);
+        assert_eq!(v[0]["type"], "DDR4");
+        assert_eq!(v[0]["form_factor"], "DIMM");
+        assert_eq!(v[0]["part_number"], "M378A2K43EB1-CWE");
+        assert_eq!(v[0]["configured_mhz"], 3200);
+        assert_eq!(v[0]["capacity_gb"], 16.0);
+        assert_eq!(v[0]["data_width"], 64);
+    }
+
+    #[test]
+    fn gpu_keeps_resolution_and_driver_date() {
+        let rows = vec![json!({
+            "Name": "NVIDIA GeForce RTX 3060",
+            "AdapterRAM": 4293918720.0,
+            "DriverVersion": "32.0.15.6094",
+            "DriverDate": "2024-11-01",
+            "Width": 1920,
+            "Height": 1080,
+            "Refresh": 144,
+            "Vendor": "NVIDIA"
+        })];
+        let reg = std::collections::HashMap::new();
+        let v = gpus_from_snapshot(&rows, &reg);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0]["width"], 1920);
+        assert_eq!(v[0]["height"], 1080);
+        assert_eq!(v[0]["refresh"], 144);
+        assert_eq!(v[0]["driver_date"], "2024-11-01");
+        assert_eq!(v[0]["virtual"], false);
+        assert_eq!(v[0]["vram"], 4095);
+    }
+
+    #[test]
+    fn disk_keeps_serial_and_firmware() {
+        let rows = vec![json!({
+            "Model": "WD PC SN810 SDCPNRY-512G",
+            "Size": 512110190592u64,
+            "InterfaceType": "SCSI",
+            "SerialNumber": "  SN123  ",
+            "FirmwareRevision": "53006100"
+        })];
+        let phys = vec![json!({
+            "FriendlyName": "WD PC SN810 SDCPNRY-512G",
+            "MediaType": 4,
+            "BusType": 17,
+            "HealthStatus": 0,
+            "Size": 512110190592u64
+        })];
+        let v = disks_from_snapshot(&rows, &phys);
+        assert_eq!(v[0]["bus"], "NVMe");
+        assert_eq!(v[0]["media"], "SSD");
+        assert_eq!(v[0]["health"], "Healthy");
+        assert_eq!(v[0]["serial"], "SN123");
+        assert_eq!(v[0]["firmware"], "53006100");
     }
 }

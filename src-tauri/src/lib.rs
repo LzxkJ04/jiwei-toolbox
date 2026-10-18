@@ -225,6 +225,7 @@ pub fn run() {
             uninstall::remove_residual,
             // 硬件
             hardware::hw_info,
+            hardware::hw_usage,
             hardware::cpu_burn_start,
             hardware::cpu_burn_stop,
             hardware::disk_speed,

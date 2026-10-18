@@ -77,10 +77,34 @@ export interface HwMemoryModule {
   manufacturer: string;
   capacity_gb: number;
   speed: number;
+  /** 实际运行频率，未知为 0 */
+  configured_mhz?: number;
   /** 插槽，如 Controller0-ChannelA-DIMM1 */
   slot?: string;
+  bank?: string;
+  part_number?: string;
+  /** DIMM / SO-DIMM，未知为空 */
+  form_factor?: string;
+  /** 位宽，未知为 0 */
+  data_width?: number;
   /** DDR4 / DDR5，未知为空 */
   type?: string;
+}
+
+export interface HwCpu {
+  name: string;
+  cores: number;
+  threads: number;
+  /** 最高睿频 / 标称频率 MHz */
+  mhz?: number;
+  current_mhz?: number;
+  l2_kb?: number;
+  l3_kb?: number;
+  vendor?: string;
+  arch?: string;
+  socket?: string;
+  /** null 表示系统没报告，不是「未开启」 */
+  virtualization?: boolean | null;
 }
 
 export interface HwGpu {
@@ -88,6 +112,11 @@ export interface HwGpu {
   /** 显存 MB；0 表示未知 */
   vram: number;
   driver?: string;
+  driver_date?: string;
+  vendor?: string;
+  width?: number;
+  height?: number;
+  refresh?: number;
   /** 远程/虚拟显示器，没有真实显存 */
   virtual?: boolean;
 }
@@ -98,6 +127,8 @@ export interface HwDisk {
   media?: string;
   bus?: string;
   health?: string;
+  serial?: string;
+  firmware?: string;
 }
 
 export interface HwVolume {
@@ -106,16 +137,31 @@ export interface HwVolume {
   free: number;
 }
 
+export interface HwOs {
+  caption?: string;
+  version?: string;
+  build?: string;
+  arch?: string;
+}
+
 export interface HwInfo {
-  cpu: { name: string; cores: number; threads: number; mhz?: number };
+  cpu: HwCpu;
   memory_total: number;
   /** 内存条明细（后端字段 memoryModules） */
   memoryModules?: HwMemoryModule[];
   board: string;
-  bios?: { version?: string; date?: string };
+  motherboard?: { manufacturer?: string; product?: string; version?: string; serial?: string };
+  bios?: { vendor?: string; version?: string; date?: string };
+  os?: HwOs;
   gpus: HwGpu[];
   disks: HwDisk[];
   volumes?: HwVolume[];
+}
+
+export interface HwUsage {
+  cpu_pct: number;
+  mem_used: number;
+  mem_total: number;
 }
 
 export interface DiskSpeed {
@@ -382,6 +428,8 @@ export const killProcess = (pids: number[]) => tryCall<KillResult>("kill_process
 
 // —— 硬件
 export const hwInfo = () => tryCall<HwInfo>("hw_info");
+/** 实时占用。轮询用，失败不弹 toast */
+export const hwUsage = () => invoke<HwUsage>("hw_usage").catch(() => null);
 export const cpuBurnStart = (seconds: number) => tryCall<null>("cpu_burn_start", { seconds });
 export const cpuBurnStop = () => tryCall<null>("cpu_burn_stop");
 export const diskSpeed = (path: string) => tryCall<DiskSpeed>("disk_speed", { path });

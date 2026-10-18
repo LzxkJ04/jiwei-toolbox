@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import {
-  CircuitBoard, Cpu, Fan, Flame, Grid3x3, HardDrive, Loader2, MemoryStick, Monitor,
+  CircuitBoard, Copy, Cpu, Eye, EyeOff, Flame, Grid3x3, HardDrive, Loader2, MemoryStick, Monitor,
   Play, RefreshCw, Square, Zap,
 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
@@ -14,12 +14,25 @@ import Spinner from "../components/ui/Spinner.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import {
   cpuBurnStart, cpuBurnStop, cpuTemp, diskSmart, diskSpeed, gpuBurnStart, gpuBurnStop,
-  gpuTemp, hwInfo, memTestStart, onCpuLoad, onGpuLoad, onMemTestDone, onMemTestProgress,
-  type DiskSmartInfo, type DiskSpeed, type HwInfo, type MemTestResult,
+  gpuTemp, hwInfo, hwUsage, memTestStart, onCpuLoad, onGpuLoad, onMemTestDone, onMemTestProgress,
+  type DiskSmartInfo, type DiskSpeed, type HwDisk, type HwGpu, type HwInfo, type HwMemoryModule, type HwUsage, type MemTestResult,
 } from "../lib/tauri";
-import { formatBytes } from "../lib/utils";
+import { copyText, formatBytes } from "../lib/utils";
+import { toast } from "../lib/toast";
 
-/* ============ 通用：烤机时长选项 ============ */
+type HwTab = "overview" | "cpu" | "board" | "gpu" | "disk" | "stress";
+
+const TABS: { id: HwTab; label: string }[] = [
+  { id: "overview", label: "总览" },
+  { id: "cpu", label: "处理器" },
+  { id: "board", label: "内存主板" },
+  { id: "gpu", label: "显卡" },
+  { id: "disk", label: "存储" },
+  { id: "stress", label: "压测" },
+];
+
+const tab = ref<HwTab>("overview");
+const hideVirtual = ref(true);
 
 const BURN_OPTS = [
   { value: "30", label: "30 秒" },
@@ -33,39 +46,96 @@ function fmtCountdown(totalSec: number) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+function dash(v?: string | number | null) {
+  if (v === null || v === undefined) return "—";
+  const s = String(v).trim();
+  return s ? s : "—";
+}
+
+function clockText(mhz?: number) {
+  if (!mhz) return "—";
+  if (mhz >= 1000) return `${(mhz / 1000).toFixed(2)} GHz`;
+  return `${mhz} MHz`;
+}
+
+function cacheText(kb?: number) {
+  if (!kb) return "—";
+  if (kb >= 1024) {
+    const mb = kb / 1024;
+    return `${Number.isInteger(mb) ? mb.toFixed(0) : mb.toFixed(1)} MB`;
+  }
+  return `${kb} KB`;
+}
+
+function virtText(v: boolean | null | undefined) {
+  if (v === true) return "已开启";
+  if (v === false) return "未开启";
+  return "未报告";
+}
+
 /* ============ 硬件信息 ============ */
 
 const hw = ref<HwInfo | null>(null);
 const hwLoading = ref(false);
+const usage = ref<HwUsage | null>(null);
+const usageSamples = ref(0);
 
-function moduleLine(m: { manufacturer?: string; capacity_gb?: number; speed?: number; slot?: string; type?: string }) {
-  const who = (m.manufacturer || "").trim();
-  const cap = m.capacity_gb ? `${m.capacity_gb} GB` : "";
-  const kind = (m.type || "").trim();
-  const spd = m.speed ? `${m.speed} MHz` : "";
-  const slot = (m.slot || "").trim();
-  return [who, cap, kind, spd, slot].filter(Boolean).join(" · ");
-}
+const visibleGpus = computed(() => {
+  const list = hw.value?.gpus || [];
+  return hideVirtual.value ? list.filter((g) => !g.virtual) : list;
+});
+const hiddenGpuCount = computed(() => (hw.value?.gpus || []).filter((g) => g.virtual).length);
+const primaryGpu = computed(() => visibleGpus.value[0] || hw.value?.gpus?.[0]);
 
-function cpuSub(cpu?: { cores?: number; threads?: number; mhz?: number }) {
+const osLine = computed(() => {
+  const os = hw.value?.os;
+  if (!os) return "";
+  return [os.caption, os.version, os.build ? `Build ${os.build}` : "", os.arch].filter(Boolean).join(" · ");
+});
+
+const cpuLive = computed(() => (usageSamples.value >= 2 ? usage.value?.cpu_pct ?? null : null));
+const memPct = computed(() => {
+  const u = usage.value;
+  if (!u?.mem_total) return 0;
+  return Math.min(100, Math.max(0, (u.mem_used / u.mem_total) * 100));
+});
+
+function cpuSub(cpu?: HwInfo["cpu"]) {
   const base = `${cpu?.cores || 0} 核 / ${cpu?.threads || 0} 线程`;
-  const mhz = cpu?.mhz || 0;
-  if (!mhz) return base;
-  const clock = mhz >= 1000 ? `${(mhz / 1000).toFixed(2)} GHz` : `${mhz} MHz`;
-  return `${base} · 最高 ${clock}`;
+  const parts = [base];
+  if (cpu?.arch) parts.push(cpu.arch);
+  if (cpu?.mhz) parts.push(`最高 ${clockText(cpu.mhz)}`);
+  if (cpu?.current_mhz) parts.push(`当前 ${clockText(cpu.current_mhz)}`);
+  return parts.join(" · ");
 }
 
-function gpuSub(g: { vram?: number; driver?: string; virtual?: boolean }) {
+function vramText(vram: number) {
+  if (!vram || vram <= 0) return "";
+  const mb = vram > 65536 ? Math.round(vram / 1048576) : Math.round(vram);
+  if (mb <= 0) return "";
+  if (mb >= 1024) {
+    const gb = mb / 1024;
+    return `${Number.isInteger(gb) ? gb.toFixed(0) : gb.toFixed(1)} GB`;
+  }
+  return `${mb} MB`;
+}
+
+function gpuSub(g: HwGpu) {
   const parts: string[] = [];
   if (g.virtual) parts.push("虚拟显示器");
   const vram = vramText(g.vram || 0);
-  if (vram) parts.push(vram);
+  if (vram) parts.push(`${vram} 显存`);
   else if (!g.virtual) parts.push("显存未报告");
   if (g.driver) parts.push(`驱动 ${g.driver}`);
   return parts.join(" · ");
 }
 
-function diskSub(d: { size?: number; media?: string; bus?: string; health?: string }) {
+function resText(g: HwGpu) {
+  if (!g.width || !g.height) return "—";
+  return `${g.width}×${g.height}${g.refresh ? ` @ ${g.refresh} Hz` : ""}`;
+}
+
+function diskSub(d: HwDisk) {
   const parts: string[] = [];
   if (d.size && d.size > 0) parts.push(formatBytes(d.size));
   if (d.bus && d.bus !== "SCSI") parts.push(d.bus);
@@ -74,12 +144,52 @@ function diskSub(d: { size?: number; media?: string; bus?: string; health?: stri
   return parts.join(" · ") || "容量未知";
 }
 
-const biosLine = computed(() => {
-  const b = hw.value?.bios;
-  if (!b) return "";
-  const ver = (b.version || "").trim();
-  const date = (b.date || "").trim();
-  return [ver ? `BIOS ${ver}` : "", date].filter(Boolean).join(" · ");
+function moduleBrief(m: HwMemoryModule) {
+  return [m.manufacturer, m.capacity_gb ? `${m.capacity_gb} GB` : "", m.type, m.speed ? `${m.speed} MHz` : ""]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function usedPct(total?: number, free?: number) {
+  if (!total) return 0;
+  return Math.min(100, Math.max(0, ((total - (free || 0)) / total) * 100));
+}
+
+function barColor(pct: number) {
+  if (pct >= 90) return "#e5484d";
+  if (pct >= 75) return "#f5a623";
+  return "var(--primary)";
+}
+
+const cpuRows = computed(() => {
+  const c = hw.value?.cpu;
+  return [
+    ["型号", dash(c?.name)],
+    ["厂商", dash(c?.vendor)],
+    ["架构", dash(c?.arch)],
+    ["插槽", dash(c?.socket)],
+    ["核心 / 线程", c ? `${c.cores || 0} / ${c.threads || 0}` : "—"],
+    ["最高频率", clockText(c?.mhz)],
+    ["当前频率", clockText(c?.current_mhz)],
+    ["二级缓存", cacheText(c?.l2_kb)],
+    ["三级缓存", cacheText(c?.l3_kb)],
+    ["硬件虚拟化", virtText(c?.virtualization)],
+  ] as [string, string][];
+});
+
+const boardRows = computed(() => {
+  const b = hw.value?.motherboard;
+  const bios = hw.value?.bios;
+  return [
+    ["主板厂商", dash(b?.manufacturer)],
+    ["主板型号", dash(b?.product)],
+    ["主板版本", dash(b?.version)],
+    ["主板序列号", dash(b?.serial)],
+    ["BIOS 厂商", dash(bios?.vendor)],
+    ["BIOS 版本", dash(bios?.version)],
+    ["BIOS 日期", dash(bios?.date)],
+    ["系统", dash(osLine.value)],
+  ] as [string, string][];
 });
 
 async function loadHw() {
@@ -88,16 +198,27 @@ async function loadHw() {
   hwLoading.value = false;
 }
 
-function vramText(vram: number) {
-  if (!vram || vram <= 0) return "";
-  // 后端已换算为 MB；若仍是字节（旧数据 > 64GB 当 MB 不可能）则再除一次
-  const mb = vram > 65536 ? Math.round(vram / 1048576) : Math.round(vram);
-  if (mb <= 0) return "";
-  if (mb >= 1024) {
-    const gb = mb / 1024;
-    return `${Number.isInteger(gb) ? gb.toFixed(0) : gb.toFixed(1)} GB 显存`;
-  }
-  return `${mb} MB 显存`;
+async function copyReport() {
+  const h = hw.value;
+  if (!h) return;
+  const lines = [
+    "极维工具箱 · 硬件报告",
+    osLine.value ? `系统：${osLine.value}` : "",
+    `处理器：${h.cpu.name || "—"}`,
+    `  ${cpuSub(h.cpu)}`,
+    `  厂商 ${dash(h.cpu.vendor)} · 插槽 ${dash(h.cpu.socket)} · L2 ${cacheText(h.cpu.l2_kb)} · L3 ${cacheText(h.cpu.l3_kb)} · 虚拟化 ${virtText(h.cpu.virtualization)}`,
+    `内存：${formatBytes(h.memory_total)}`,
+    ...(h.memoryModules || []).map((m) => `  ${moduleBrief(m)} · ${dash(m.part_number)} · ${dash(m.form_factor)} · ${dash(m.slot)}`),
+    `主板：${h.board || "—"}`,
+    `  序列号 ${dash(h.motherboard?.serial)} · BIOS ${dash(h.bios?.vendor)} ${dash(h.bios?.version)} ${dash(h.bios?.date)}`,
+    "显卡：",
+    ...(h.gpus || []).map((g) => `  ${g.name} · ${gpuSub(g)} · ${resText(g)} · 驱动日期 ${dash(g.driver_date)}`),
+    "磁盘：",
+    ...(h.disks || []).map((d) => `  ${d.model} · ${diskSub(d)} · SN ${dash(d.serial)} · FW ${dash(d.firmware)}`),
+    ...(h.volumes || []).map((v) => `  ${v.mount} 可用 ${formatBytes(v.free)} / ${formatBytes(v.total)}`),
+  ].filter(Boolean);
+  const ok = await copyText(lines.join("\n"));
+  toast(ok ? "硬件报告已复制" : "复制失败", ok ? "success" : "error");
 }
 
 /* ============ CPU 烤机 ============ */
@@ -105,9 +226,7 @@ function vramText(vram: number) {
 const cpuDur = ref("60");
 const cpuRunning = ref(false);
 const cpuPct = ref(0);
-const cpuRemain = computed(() =>
-  Math.max(0, Math.ceil((Number(cpuDur.value) * (100 - cpuPct.value)) / 100))
-);
+const cpuRemain = computed(() => Math.max(0, Math.ceil((Number(cpuDur.value) * (100 - cpuPct.value)) / 100)));
 
 async function cpuStart() {
   if (cpuRunning.value) return;
@@ -122,16 +241,14 @@ async function cpuStop() {
   cpuPct.value = 0;
 }
 
-/* ============ GPU 烤机（紫色风格） ============ */
+/* ============ GPU 烤机 ============ */
 
 const gpuDur = ref("60");
 const gpuRunning = ref(false);
 const gpuPct = ref(0);
 const gpuFps = ref(0);
 const gpuError = ref<string | null>(null);
-const gpuRemain = computed(() =>
-  Math.max(0, Math.ceil((Number(gpuDur.value) * (100 - gpuPct.value)) / 100))
-);
+const gpuRemain = computed(() => Math.max(0, Math.ceil((Number(gpuDur.value) * (100 - gpuPct.value)) / 100)));
 
 async function gpuStart() {
   if (gpuRunning.value || gpuError.value) return;
@@ -151,14 +268,14 @@ async function gpuStop() {
 /* ============ 内存测试 ============ */
 
 const memRunning = ref(false);
-const memPct = ref(0);
+const memPctTest = ref(0);
 const memErrors = ref(0);
 const memResult = ref<MemTestResult | null>(null);
 
 async function memStart() {
   if (memRunning.value) return;
   memResult.value = null;
-  memPct.value = 0;
+  memPctTest.value = 0;
   memErrors.value = 0;
   memRunning.value = true;
   await memTestStart();
@@ -166,13 +283,23 @@ async function memStart() {
 
 /* ============ 磁盘测速 ============ */
 
-const DRIVE_OPTS = ["C", "D", "E", "F", "G", "H"].map((d) => ({
-  value: `${d}:\\`,
-  label: `${d} 盘`,
-}));
+const FALLBACK_DRIVES = ["C", "D", "E", "F", "G", "H"].map((d) => ({ value: `${d}:\\`, label: `${d} 盘` }));
 const diskSel = ref("C:\\");
 const diskTesting = ref(false);
 const diskRes = ref<DiskSpeed | null>(null);
+
+const driveOpts = computed(() => {
+  const seen = new Set<string>();
+  const opts = (hw.value?.volumes || [])
+    .map((v) => {
+      const letter = v.mount.match(/([A-Za-z]):/)?.[1]?.toUpperCase();
+      if (!letter || seen.has(letter)) return null;
+      seen.add(letter);
+      return { value: `${letter}:\\`, label: `${letter} 盘` };
+    })
+    .filter((x): x is { value: string; label: string } => !!x);
+  return opts.length ? opts : FALLBACK_DRIVES;
+});
 
 async function runDiskSpeed() {
   if (diskTesting.value) return;
@@ -182,12 +309,11 @@ async function runDiskSpeed() {
   diskTesting.value = false;
 }
 
-/** 测速结果可能缺字段（旧契约曾把 read_mbps 序列化成 readMbps），不能直接 toFixed */
 function fmtMbps(n: number | null | undefined) {
   return typeof n === "number" && Number.isFinite(n) ? n.toFixed(1) : "—";
 }
 
-/* ============ 坏点检测（纯前端全屏纯色覆盖层） ============ */
+/* ============ 坏点检测 ============ */
 
 const PIXEL_COLORS = [
   { label: "红", value: "#ff0000" },
@@ -206,7 +332,7 @@ function onGlobalKey(e: KeyboardEvent) {
   if (e.key === "Escape") closePixel();
 }
 
-/* ============ 温度监控（10s 轮询；页面切走/最小化时暂停） ============ */
+/* ============ 温度 + 占用 ============ */
 
 const cpuT = ref<number | null>(null);
 const gpuT = ref<number | null>(null);
@@ -215,20 +341,40 @@ const tempLoading = ref(false);
 async function refreshTemps() {
   tempLoading.value = true;
   const [c, g] = await Promise.all([cpuTemp(), gpuTemp()]);
-  // 后端温度传感器不可用时返回 null，UI 显示 "—"
   cpuT.value = c;
   gpuT.value = g;
   tempLoading.value = false;
 }
 
+let usageBusy = false;
+async function refreshUsage() {
+  if (usageBusy) return;
+  usageBusy = true;
+  try {
+    const u = await hwUsage();
+    if (u && u.mem_total > 0) {
+      usage.value = u;
+      usageSamples.value += 1;
+    }
+  } finally {
+    usageBusy = false;
+  }
+}
+
 let tempTimer: number | undefined;
+let usageTimer: number | undefined;
 
 function startPolling() {
-  if (tempTimer !== undefined) return;
-  tempTimer = window.setInterval(() => {
-    // 页面在后台（最小化到托盘）时跳过本次采集
-    if (document.visibilityState === "visible") void refreshTemps();
-  }, 10_000);
+  if (tempTimer === undefined) {
+    tempTimer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshTemps();
+    }, 10_000);
+  }
+  if (usageTimer === undefined) {
+    usageTimer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshUsage();
+    }, 2_000);
+  }
 }
 
 function stopPolling() {
@@ -236,14 +382,19 @@ function stopPolling() {
     window.clearInterval(tempTimer);
     tempTimer = undefined;
   }
+  if (usageTimer !== undefined) {
+    window.clearInterval(usageTimer);
+    usageTimer = undefined;
+  }
 }
 
 function onVisibilityChange() {
-  // 重新可见时立即刷新一次
-  if (document.visibilityState === "visible") void refreshTemps();
+  if (document.visibilityState === "visible") {
+    void refreshTemps();
+    void refreshUsage();
+  }
 }
 
-/** 温度配色：≥80 红 / ≥60 黄 / 其余绿，null 灰 */
 function tempClass(t: number | null) {
   if (t === null) return "text-[var(--muted)]";
   if (t >= 80) return "text-[#e5484d]";
@@ -254,7 +405,7 @@ function tempText(t: number | null) {
   return t === null ? "—" : `${t}℃`;
 }
 
-/* ============ 磁盘健康（SMART） ============ */
+/* ============ SMART ============ */
 
 const smartDisks = ref<DiskSmartInfo[]>([]);
 const smartFailed = ref(false);
@@ -270,7 +421,6 @@ async function readSmart() {
   smartDisks.value = res ?? [];
 }
 
-/** 健康状态映射：Healthy 绿 / Warning 黄 / Unhealthy 红，未知状态原样灰色显示 */
 function healthMeta(s?: string): { label: string; cls: string } {
   const v = (s ?? "").trim().toLowerCase();
   if (v === "unhealthy" || v.includes("fail") || v.includes("bad")) {
@@ -285,8 +435,6 @@ function healthMeta(s?: string): { label: string; cls: string } {
   return { label: s || "未知", cls: "text-[var(--muted)]" };
 }
 
-/** 磁盘温度配色：>60 红 / 45~60 黄 */
-/** 优先用 HealthStatus（Healthy），没有再用 OperationalStatus（OK） */
 function smartHealthText(d: DiskSmartInfo): string | undefined {
   if (typeof d.health === "string" && d.health.trim()) return d.health;
   return d.status;
@@ -299,13 +447,12 @@ function diskTempClass(t: number | null | undefined) {
   return "";
 }
 
-/* ============ 生命周期：加载数据 + 注册事件（onUnmounted 全部清理） ============ */
-
 const unlistens: UnlistenFn[] = [];
 
 onMounted(async () => {
   void loadHw();
   void refreshTemps();
+  void refreshUsage();
   startPolling();
   document.addEventListener("visibilitychange", onVisibilityChange);
   document.addEventListener("keydown", onGlobalKey);
@@ -326,14 +473,14 @@ onMounted(async () => {
       if (d.pct >= 100) gpuRunning.value = false;
     }),
     await onMemTestProgress((d) => {
-      memPct.value = d.pct;
+      memPctTest.value = d.pct;
       memErrors.value = d.errors;
     }),
     await onMemTestDone((d) => {
       memRunning.value = false;
-      memPct.value = 100;
+      memPctTest.value = 100;
       memResult.value = d;
-    })
+    }),
   );
 });
 
@@ -348,378 +495,378 @@ onUnmounted(() => {
 
 <template>
   <div>
-    <PageHeader title="硬件检测" desc="硬件信息、烤机压测、磁盘测速、内存测试与屏幕坏点检测" />
+    <PageHeader title="硬件检测" desc="总览一屏看完。点开分类看完整规格，压测集中在最后一栏。">
+      <template #extra>
+        <Button
+          variant="gray"
+          size="sm"
+          :title="hideVirtual ? '显示远程和虚拟显示器' : '隐藏远程和虚拟显示器'"
+          @click="hideVirtual = !hideVirtual"
+        >
+          <EyeOff v-if="hideVirtual" class="h-3.5 w-3.5" />
+          <Eye v-else class="h-3.5 w-3.5" />
+          {{ hideVirtual ? `虚拟显示 ${hiddenGpuCount}` : "显示全部显卡" }}
+        </Button>
+        <Button variant="gray" size="sm" :disabled="!hw" title="复制纯文本硬件报告" @click="copyReport">
+          <Copy class="h-3.5 w-3.5" /> 复制报告
+        </Button>
+        <Button variant="gray" size="icon" title="重新读取硬件信息" :disabled="hwLoading" @click="loadHw">
+          <RefreshCw class="h-4 w-4" :class="hwLoading && 'animate-spin'" />
+        </Button>
+      </template>
+    </PageHeader>
 
-    <!-- ===== 概览 ===== -->
-    <p class="mb-3 text-xs font-semibold tracking-wider text-[var(--muted)]">概览</p>
-    <div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
-      <!-- 硬件信息 -->
-      <Card class="p-5 lg:col-span-2">
-        <div class="mb-4 flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <CircuitBoard class="h-4 w-4 text-[var(--primary)]" />
-            <h4 class="font-semibold">硬件信息</h4>
+    <div class="mb-4 flex flex-wrap gap-1 rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-1">
+      <button
+        v-for="t in TABS"
+        :key="t.id"
+        type="button"
+        class="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
+        :class="tab === t.id ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted)] hover:bg-[var(--btn-gray)] hover:text-[var(--text)]'"
+        @click="tab = t.id"
+      >
+        {{ t.label }}
+      </button>
+    </div>
+
+    <Spinner v-if="hwLoading && !hw" label="正在读取硬件信息…" />
+    <EmptyState
+      v-else-if="!hw"
+      icon="🖥️"
+      text="未能获取硬件信息"
+      sub="请点击右上角刷新重试，或检查系统权限"
+    />
+
+    <template v-else>
+      <!-- 总览：一屏 -->
+      <div v-show="tab === 'overview'" class="space-y-4">
+        <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3">
+            <p class="text-[10px] text-[var(--muted)]">CPU 占用</p>
+            <p class="mt-1 text-2xl font-bold tabular-nums text-[var(--text-strong)]">
+              {{ cpuLive === null ? "…" : `${cpuLive.toFixed(0)}%` }}
+            </p>
+            <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--btn-gray)]">
+              <div class="h-full rounded-full" :style="{ width: `${cpuLive ?? 0}%`, background: barColor(cpuLive ?? 0) }" />
+            </div>
           </div>
-          <Button variant="gray" size="icon" title="重新读取硬件信息" :disabled="hwLoading" @click="loadHw">
-            <RefreshCw class="h-4 w-4" :class="hwLoading && 'animate-spin'" />
-          </Button>
+          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3">
+            <p class="text-[10px] text-[var(--muted)]">内存占用</p>
+            <p class="mt-1 truncate text-sm font-bold tabular-nums text-[var(--text-strong)]">
+              {{ usage ? formatBytes(usage.mem_used) : "…" }}
+              <span class="text-xs font-normal text-[var(--muted)]">/ {{ formatBytes(hw.memory_total) }}</span>
+            </p>
+            <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--btn-gray)]">
+              <div class="h-full rounded-full" :style="{ width: `${memPct}%`, background: barColor(memPct) }" />
+            </div>
+          </div>
+          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3 text-center">
+            <p class="text-[10px] text-[var(--muted)]">CPU 温度</p>
+            <p class="mt-1 text-2xl font-bold tabular-nums" :class="tempClass(cpuT)">{{ tempText(cpuT) }}</p>
+          </div>
+          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3 text-center">
+            <p class="text-[10px] text-[var(--muted)]">GPU 温度</p>
+            <p class="mt-1 text-2xl font-bold tabular-nums" :class="tempClass(gpuT)">{{ tempText(gpuT) }}</p>
+          </div>
         </div>
 
-        <Spinner v-if="hwLoading" label="正在读取硬件信息…" />
-        <EmptyState
-          v-else-if="!hw"
-          icon="🖥️"
-          text="未能获取硬件信息"
-          sub="请点击右上角刷新重试，或检查系统权限"
-        />
+        <p v-if="osLine" class="truncate text-xs text-[var(--muted)]" :title="osLine">{{ osLine }}</p>
 
-        <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4">
-            <p class="mb-1.5 flex items-center gap-1.5 text-xs text-[var(--muted)]">
-              <Cpu class="h-3.5 w-3.5" /> 处理器
-            </p>
-            <p class="truncate text-sm font-semibold text-[var(--text-strong)]" :title="hw.cpu.name">
-              {{ hw.cpu.name || "—" }}
-            </p>
-            <p class="mt-1 text-xs text-[var(--muted)]">{{ cpuSub(hw.cpu) }}</p>
-          </div>
-
-          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4">
-            <p class="mb-1.5 flex items-center gap-1.5 text-xs text-[var(--muted)]">
-              <MemoryStick class="h-3.5 w-3.5" /> 内存总量
-            </p>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <button type="button" class="rounded-xl border border-[var(--card-border)] bg-[var(--card)] p-4 text-left transition-colors hover:border-[var(--primary)]" @click="tab = 'cpu'">
+            <p class="mb-1 flex items-center gap-1.5 text-xs text-[var(--muted)]"><Cpu class="h-3.5 w-3.5" /> 处理器</p>
+            <p class="truncate text-sm font-semibold text-[var(--text-strong)]" :title="hw.cpu.name">{{ hw.cpu.name || "—" }}</p>
+            <p class="mt-1 truncate text-xs text-[var(--muted)]">{{ cpuSub(hw.cpu) }}</p>
+          </button>
+          <button type="button" class="rounded-xl border border-[var(--card-border)] bg-[var(--card)] p-4 text-left transition-colors hover:border-[var(--primary)]" @click="tab = 'board'">
+            <p class="mb-1 flex items-center gap-1.5 text-xs text-[var(--muted)]"><MemoryStick class="h-3.5 w-3.5" /> 内存 · {{ hw.memoryModules?.length || 0 }} 条</p>
             <p class="text-sm font-semibold text-[var(--text-strong)]">{{ formatBytes(hw.memory_total) }}</p>
-            <p
-              v-for="(m, i) in hw.memoryModules || []"
-              :key="i"
-              class="mt-1 truncate text-xs text-[var(--muted)]"
-              :title="moduleLine(m)"
-            >
-              {{ moduleLine(m) }}
-            </p>
-          </div>
+            <p class="mt-1 truncate text-xs text-[var(--muted)]">{{ hw.board || "主板未报告" }}</p>
+          </button>
+          <button type="button" class="rounded-xl border border-[var(--card-border)] bg-[var(--card)] p-4 text-left transition-colors hover:border-[var(--primary)]" @click="tab = 'gpu'">
+            <p class="mb-1 flex items-center gap-1.5 text-xs text-[var(--muted)]"><Monitor class="h-3.5 w-3.5" /> 显卡 · {{ visibleGpus.length }}</p>
+            <p class="truncate text-sm font-semibold text-[var(--text-strong)]">{{ primaryGpu?.name || "—" }}</p>
+            <p class="mt-1 truncate text-xs text-[var(--muted)]">{{ primaryGpu ? gpuSub(primaryGpu) : "未检测到显卡" }}</p>
+          </button>
+          <button type="button" class="rounded-xl border border-[var(--card-border)] bg-[var(--card)] p-4 text-left transition-colors hover:border-[var(--primary)]" @click="tab = 'disk'">
+            <p class="mb-1 flex items-center gap-1.5 text-xs text-[var(--muted)]"><HardDrive class="h-3.5 w-3.5" /> 磁盘 · {{ hw.disks.length }}</p>
+            <p class="truncate text-sm font-semibold text-[var(--text-strong)]">{{ hw.disks[0]?.model || "—" }}</p>
+            <p class="mt-1 truncate text-xs text-[var(--muted)]">{{ hw.disks[0] ? diskSub(hw.disks[0]) : "未检测到磁盘" }}</p>
+          </button>
+        </div>
+        <p class="text-[10px] text-[var(--muted)]">占用每 2 秒刷新，温度每 10 秒刷新。页面切走时暂停。点卡片进入对应规格。</p>
+      </div>
 
-          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4">
-            <p class="mb-1.5 flex items-center gap-1.5 text-xs text-[var(--muted)]">
-              <CircuitBoard class="h-3.5 w-3.5" /> 主板
-            </p>
-            <p class="truncate text-sm font-semibold text-[var(--text-strong)]" :title="hw.board">
-              {{ hw.board || "—" }}
-            </p>
-            <p v-if="biosLine" class="mt-1 truncate text-xs text-[var(--muted)]" :title="biosLine">{{ biosLine }}</p>
+      <!-- 处理器规格 -->
+      <Card v-show="tab === 'cpu'" class="p-5">
+        <div class="mb-3 flex items-center gap-2">
+          <Cpu class="h-4 w-4 text-[var(--primary)]" />
+          <h4 class="font-semibold">处理器规格</h4>
+          <span class="text-xs text-[var(--muted)]">当前 {{ tempText(cpuT) }}</span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 sm:gap-x-8">
+          <div v-for="[k, v] in cpuRows" :key="k" class="flex items-baseline justify-between gap-3 border-b border-[var(--card-border)] py-2.5">
+            <span class="shrink-0 text-xs text-[var(--muted)]">{{ k }}</span>
+            <span class="min-w-0 truncate text-right text-sm font-medium text-[var(--text-strong)]" :title="v">{{ v }}</span>
           </div>
+        </div>
+      </Card>
 
-          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4">
-            <p class="mb-1.5 flex items-center gap-1.5 text-xs text-[var(--muted)]">
-              <Monitor class="h-3.5 w-3.5" /> 显卡（{{ hw.gpus.length }}）
-            </p>
-            <div v-for="(g, i) in hw.gpus" :key="i" class="mb-2 last:mb-0">
-              <p class="truncate text-sm font-semibold text-[var(--text-strong)]" :title="g.name">{{ g.name || "—" }}</p>
-              <p class="truncate text-xs text-[var(--muted)]" :title="gpuSub(g)">{{ gpuSub(g) }}</p>
+      <!-- 内存与主板 -->
+      <div v-show="tab === 'board'" class="space-y-4">
+        <Card class="p-5">
+          <div class="mb-3 flex items-center gap-2">
+            <CircuitBoard class="h-4 w-4 text-[var(--primary)]" />
+            <h4 class="font-semibold">主板与 BIOS</h4>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 sm:gap-x-8">
+            <div v-for="[k, v] in boardRows" :key="k" class="flex items-baseline justify-between gap-3 border-b border-[var(--card-border)] py-2.5">
+              <span class="shrink-0 text-xs text-[var(--muted)]">{{ k }}</span>
+              <span class="min-w-0 truncate text-right text-sm font-medium text-[var(--text-strong)]" :title="v">{{ v }}</span>
             </div>
-            <p v-if="hw.gpus.length === 0" class="text-sm text-[var(--muted)]">—</p>
           </div>
-
-          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4 sm:col-span-2">
-            <p class="mb-1.5 flex items-center gap-1.5 text-xs text-[var(--muted)]">
-              <HardDrive class="h-3.5 w-3.5" /> 磁盘（{{ hw.disks.length }}）
-            </p>
-            <div v-for="(d, i) in hw.disks" :key="i" class="mb-2 last:mb-0">
-              <p class="truncate text-sm text-[var(--text)]" :title="d.model">{{ d.model || "—" }}</p>
-              <p class="truncate text-xs text-[var(--muted)]">{{ diskSub(d) }}</p>
-            </div>
-            <p v-if="hw.disks.length === 0" class="text-sm text-[var(--muted)]">—</p>
-            <div v-if="hw.volumes && hw.volumes.length" class="mt-3 border-t border-[var(--card-border)] pt-2">
-              <p
-                v-for="(v, i) in hw.volumes"
-                :key="i"
-                class="truncate text-xs text-[var(--muted)]"
-                :title="v.mount"
-              >
-                {{ v.mount }}
-                <span class="ml-1">{{ formatBytes(v.free) }} 可用 / {{ formatBytes(v.total) }}</span>
+        </Card>
+        <Card class="p-5">
+          <div class="mb-3 flex items-center gap-2">
+            <MemoryStick class="h-4 w-4 text-[var(--primary)]" />
+            <h4 class="font-semibold">内存条</h4>
+            <span class="text-xs text-[var(--muted)]">共 {{ formatBytes(hw.memory_total) }}</span>
+          </div>
+          <p v-if="!(hw.memoryModules || []).length" class="text-sm text-[var(--muted)]">未读到内存条明细</p>
+          <div v-else class="space-y-3">
+            <div v-for="(m, i) in hw.memoryModules" :key="i" class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3">
+              <div class="flex flex-wrap items-baseline justify-between gap-2">
+                <p class="text-sm font-semibold text-[var(--text-strong)]">{{ moduleBrief(m) || "内存条" }}</p>
+                <p class="text-xs text-[var(--muted)]">{{ dash(m.slot) }}</p>
+              </div>
+              <p class="mt-1 text-xs text-[var(--muted)]">
+                型号 {{ dash(m.part_number) }} · {{ dash(m.form_factor) }} · 插槽组 {{ dash(m.bank) }}
+                · 运行 {{ m.configured_mhz ? `${m.configured_mhz} MHz` : "—" }}
+                · {{ m.data_width ? `${m.data_width}-bit` : "位宽未报告" }}
               </p>
             </div>
           </div>
-        </div>
-      </Card>
+        </Card>
+      </div>
 
-      <!-- 温度监控 -->
-      <Card class="p-5">
-        <div class="mb-4 flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <Fan class="h-4 w-4 text-[var(--primary)]" />
-            <h4 class="font-semibold">温度监控</h4>
+      <!-- 显卡 -->
+      <div v-show="tab === 'gpu'" class="space-y-3">
+        <p v-if="!visibleGpus.length" class="text-sm text-[var(--muted)]">没有可显示的显卡。虚拟显示器已隐藏 {{ hiddenGpuCount }} 个。</p>
+        <Card v-for="(g, i) in visibleGpus" :key="i" class="p-5">
+          <div class="mb-3 flex flex-wrap items-center gap-2">
+            <Monitor class="h-4 w-4 text-[var(--primary)]" />
+            <h4 class="min-w-0 flex-1 truncate font-semibold" :title="g.name">{{ g.name }}</h4>
+            <span v-if="g.virtual" class="rounded-md bg-[var(--btn-gray)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">虚拟</span>
+            <span class="text-xs" :class="tempClass(gpuT)">{{ tempText(gpuT) }}</span>
           </div>
-          <div class="flex items-center gap-2">
-            <span class="text-[10px] text-[var(--muted)]">10s 自动刷新</span>
-            <Button variant="gray" size="icon" title="手动刷新温度" :disabled="tempLoading" @click="refreshTemps">
-              <RefreshCw class="h-4 w-4" :class="tempLoading && 'animate-spin'" />
-            </Button>
+          <div class="grid grid-cols-1 sm:grid-cols-2 sm:gap-x-8">
+            <div v-for="[k, v] in [
+              ['厂商', dash(g.vendor)],
+              ['显存', vramText(g.vram) || (g.virtual ? '无' : '未报告')],
+              ['驱动版本', dash(g.driver)],
+              ['驱动日期', dash(g.driver_date)],
+              ['当前分辨率', resText(g)],
+              ['类型', g.virtual ? '远程 / 虚拟显示器' : '物理显卡'],
+            ]" :key="k" class="flex items-baseline justify-between gap-3 border-b border-[var(--card-border)] py-2.5">
+              <span class="shrink-0 text-xs text-[var(--muted)]">{{ k }}</span>
+              <span class="min-w-0 truncate text-right text-sm font-medium text-[var(--text-strong)]" :title="v">{{ v }}</span>
+            </div>
           </div>
-        </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4 text-center">
-            <p class="mb-1 text-xs text-[var(--muted)]">CPU 温度</p>
-            <p class="text-3xl font-bold tabular-nums" :class="tempClass(cpuT)">{{ tempText(cpuT) }}</p>
-          </div>
-          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4 text-center">
-            <p class="mb-1 text-xs text-[var(--muted)]">GPU 温度</p>
-            <p class="text-3xl font-bold tabular-nums" :class="tempClass(gpuT)">{{ tempText(gpuT) }}</p>
-          </div>
-        </div>
-        <p class="mt-3 text-[10px] text-[var(--muted)]">
-          传感器不可用或驱动不支持时显示「—」；页面切走或最小化时自动暂停刷新
-        </p>
-      </Card>
-    </div>
+        </Card>
+      </div>
 
-    <!-- ===== 烤机与测试 ===== -->
-    <p class="mb-3 mt-6 text-xs font-semibold tracking-wider text-[var(--muted)]">烤机与测试</p>
-    <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
-      <!-- CPU 烤机 -->
-      <Card class="p-5">
-        <div class="mb-4 flex items-center gap-2">
-          <Flame class="h-4 w-4 text-[var(--primary)]" />
-          <h4 class="font-semibold">CPU 烤机</h4>
-        </div>
-        <div class="mb-3 flex items-center gap-3">
-          <Select v-model="cpuDur" :options="BURN_OPTS" class="w-36" />
-          <div class="flex-1" />
-          <Button variant="primary" size="sm" :disabled="cpuRunning" @click="cpuStart">
-            <Play class="h-3.5 w-3.5" /> 开始
-          </Button>
-          <Button variant="danger" size="sm" :disabled="!cpuRunning" @click="cpuStop">
-            <Square class="h-3.5 w-3.5" /> 停止
-          </Button>
-        </div>
-        <Progress :value="cpuPct" :tone="cpuPct >= 100 ? 'success' : 'warning'" />
-        <div class="mt-2 flex items-center justify-between text-xs text-[var(--muted)]">
-          <span>{{ cpuRunning ? "烤机进行中，请留意温度" : "选择时长后开始 CPU 稳定性压测" }}</span>
-          <span v-if="cpuRunning" class="font-mono font-semibold tabular-nums text-[var(--text)]">
-            剩余 {{ fmtCountdown(cpuRemain) }}（{{ Math.round(cpuPct) }}%）
-          </span>
-        </div>
-      </Card>
-
-      <!-- GPU 烤机（紫色风格） -->
-      <Card class="p-5">
-        <div class="mb-4 flex items-center gap-2">
-          <Zap class="h-4 w-4 text-[#a78bfa]" />
-          <h4 class="font-semibold">GPU 烤机</h4>
-          <span class="rounded-md bg-[#8b5cf6]/15 px-1.5 py-0.5 text-[10px] font-medium text-[#a78bfa]">GPU</span>
-        </div>
-        <div class="mb-3 flex items-center gap-3">
-          <Select v-model="gpuDur" :options="BURN_OPTS" class="w-36" />
-          <div class="flex-1" />
-          <Button variant="primary" size="sm" :disabled="gpuRunning || !!gpuError" @click="gpuStart">
-            <Play class="h-3.5 w-3.5" /> 开始
-          </Button>
-          <Button variant="danger" size="sm" :disabled="!gpuRunning" @click="gpuStop">
-            <Square class="h-3.5 w-3.5" /> 停止
-          </Button>
-        </div>
-
-        <!-- 紫色进度条 -->
-        <div class="h-2 w-full overflow-hidden rounded-full bg-[var(--btn-gray)]">
-          <div
-            class="h-full rounded-full transition-[width] duration-200"
-            :style="{ width: `${Math.min(100, Math.max(0, gpuPct))}%`, background: 'linear-gradient(90deg, #7c3aed, #a78bfa)' }"
-          />
-        </div>
-
-        <div class="mt-2 flex items-center justify-between text-xs">
-          <template v-if="gpuError">
-            <span class="text-[#e5484d]">GPU 烤机出错：{{ gpuError }}（已禁用，请检查显卡驱动）</span>
-          </template>
-          <template v-else>
-            <span class="text-[var(--muted)]">{{ gpuRunning ? "GPU 压测进行中" : "选择时长后开始 GPU 稳定性压测" }}</span>
-            <span v-if="gpuRunning" class="font-mono font-semibold tabular-nums text-[var(--text)]">
-              FPS {{ gpuFps }} · 剩余 {{ fmtCountdown(gpuRemain) }}（{{ Math.round(gpuPct) }}%）
-            </span>
-          </template>
-        </div>
-      </Card>
-
-      <!-- 内存测试 -->
-      <Card class="p-5">
-        <div class="mb-4 flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <MemoryStick class="h-4 w-4 text-[var(--primary)]" />
-            <h4 class="font-semibold">内存测试</h4>
-          </div>
-          <Button variant="primary" size="sm" :disabled="memRunning" @click="memStart">
-            <Loader2 v-if="memRunning" class="h-3.5 w-3.5 animate-spin" />
-            <Play v-else class="h-3.5 w-3.5" />
-            {{ memRunning ? "测试中…" : "开始测试" }}
-          </Button>
-        </div>
-
-        <Progress :value="memPct" :tone="memResult ? (memResult.errors === 0 ? 'success' : 'danger') : 'primary'" />
-        <p v-if="memRunning" class="mt-2 text-xs text-[var(--muted)]">
-          正在检测内存块… 进度 {{ Math.round(memPct) }}%<template v-if="memErrors > 0">，已发现 <span class="font-semibold text-[#e5484d]">{{ memErrors }} 个错误</span></template>
-        </p>
-
-        <!-- 结果面板 -->
-        <div
-          v-if="memResult"
-          class="mt-3 rounded-xl border p-4 text-center"
-          :class="memResult.errors === 0 ? 'border-[#30a46c]/40 bg-[#30a46c]/10' : 'border-[#e5484d]/40 bg-[#e5484d]/10'"
-        >
-          <p class="text-lg font-bold" :class="memResult.errors === 0 ? 'text-[#30a46c]' : 'text-[#e5484d]'">
-            {{ memResult.errors === 0 ? "✓ 无错误" : `✗ 发现 ${memResult.errors} 个错误` }}
-          </p>
-          <p class="mt-1 text-xs text-[var(--muted)]">
-            共检测 {{ memResult.blocks_total }} 个内存块 · 耗时 {{ memResult.seconds }} 秒
-          </p>
-        </div>
-        <p v-else-if="!memRunning" class="mt-2 text-xs text-[var(--muted)]">
-          对物理内存进行读写校验，检测内存条稳定性
-        </p>
-      </Card>
-
-      <!-- 磁盘测速 -->
-      <Card class="p-5">
-        <div class="mb-4 flex items-center justify-between">
-          <div class="flex items-center gap-2">
+      <!-- 存储 -->
+      <div v-show="tab === 'disk'" class="space-y-4">
+        <Card v-for="(d, i) in hw.disks" :key="i" class="p-5">
+          <div class="mb-2 flex flex-wrap items-center gap-2">
             <HardDrive class="h-4 w-4 text-[var(--primary)]" />
-            <h4 class="font-semibold">磁盘测速</h4>
+            <h4 class="min-w-0 flex-1 truncate font-semibold" :title="d.model">{{ d.model || "未知磁盘" }}</h4>
+            <span class="text-xs font-semibold" :class="healthMeta(d.health).cls">{{ healthMeta(d.health).label }}</span>
           </div>
-          <div class="flex items-center gap-3">
-            <Select v-model="diskSel" :options="DRIVE_OPTS" class="w-32" />
-            <Button variant="primary" size="sm" :disabled="diskTesting" @click="runDiskSpeed">
-              <Loader2 v-if="diskTesting" class="h-3.5 w-3.5 animate-spin" />
-              <Play v-else class="h-3.5 w-3.5" />
-              {{ diskTesting ? "测速中…" : "开始测速" }}
+          <p class="text-xs text-[var(--muted)]">
+            {{ diskSub(d) }} · 序列号 {{ dash(d.serial) }} · 固件 {{ dash(d.firmware) }}
+          </p>
+        </Card>
+        <Card v-if="hw.volumes?.length" class="p-5">
+          <h4 class="mb-3 font-semibold">分区</h4>
+          <div class="space-y-3">
+            <div v-for="(v, i) in hw.volumes" :key="i">
+              <div class="mb-1 flex items-baseline justify-between gap-3 text-xs">
+                <span class="truncate font-medium text-[var(--text-strong)]">{{ v.mount }}</span>
+                <span class="shrink-0 tabular-nums text-[var(--muted)]">
+                  {{ formatBytes(v.total - v.free) }} / {{ formatBytes(v.total) }}
+                </span>
+              </div>
+              <div class="h-1.5 overflow-hidden rounded-full bg-[var(--btn-gray)]">
+                <div class="h-full rounded-full" :style="{ width: `${usedPct(v.total, v.free)}%`, background: barColor(usedPct(v.total, v.free)) }" />
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <Card class="p-5">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <HardDrive class="h-4 w-4 text-[var(--primary)]" />
+              <h4 class="font-semibold">SMART</h4>
+            </div>
+            <Button variant="gray" size="sm" :disabled="smartLoading" @click="readSmart">
+              <RefreshCw class="h-3.5 w-3.5" :class="smartLoading && 'animate-spin'" />
+              {{ smartRead ? "重新读取" : "读取 SMART" }}
             </Button>
           </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4 text-center">
-            <p class="mb-1 text-xs text-[var(--muted)]">读取速度</p>
-            <p class="text-3xl font-bold tabular-nums text-[var(--text-strong)]">
-              {{ fmtMbps(diskRes?.read_mbps) }}
-              <span class="ml-1 text-sm font-normal text-[var(--muted)]">MB/s</span>
-            </p>
+          <Spinner v-if="smartLoading" label="正在读取磁盘 SMART 信息…" />
+          <p v-else-if="smartFailed" class="text-sm text-[var(--muted)]">读取失败：需要管理员权限，或硬盘不支持 SMART</p>
+          <p v-else-if="!smartRead" class="text-sm text-[var(--muted)]">读取健康状态、温度、通电时间和磨损</p>
+          <p v-else-if="smartDisks.length === 0" class="text-sm text-[var(--muted)]">未发现磁盘</p>
+          <div v-else class="overflow-x-auto rounded-xl border border-[var(--card-border)]">
+            <table class="w-full min-w-[720px] text-left text-xs">
+              <thead>
+                <tr class="border-b border-[var(--card-border)] bg-[var(--card-soft)] text-[var(--muted)]">
+                  <th class="px-3 py-2.5 font-medium">型号</th>
+                  <th class="px-3 py-2.5 font-medium">序列号</th>
+                  <th class="px-3 py-2.5 font-medium">总线</th>
+                  <th class="px-3 py-2.5 font-medium">介质</th>
+                  <th class="px-3 py-2.5 font-medium">健康</th>
+                  <th class="px-3 py-2.5 text-right font-medium">温度</th>
+                  <th class="px-3 py-2.5 text-right font-medium">通电</th>
+                  <th class="px-3 py-2.5 text-right font-medium">损耗</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-[var(--card-border)]">
+                <tr v-for="(d, i) in smartDisks" :key="`${d.serial}-${i}`">
+                  <td class="max-w-[180px] truncate px-3 py-2.5 font-medium" :title="d.model">{{ d.model || "—" }}</td>
+                  <td class="px-3 py-2.5 font-mono">{{ d.serial || "—" }}</td>
+                  <td class="px-3 py-2.5">{{ d.bus_type || "—" }}</td>
+                  <td class="px-3 py-2.5">{{ d.media || "—" }}</td>
+                  <td class="px-3 py-2.5 font-semibold" :class="healthMeta(smartHealthText(d)).cls">{{ healthMeta(smartHealthText(d)).label }}</td>
+                  <td class="px-3 py-2.5 text-right tabular-nums" :class="diskTempClass(d.temperature_c)">{{ d.temperature_c == null ? "—" : d.temperature_c }}</td>
+                  <td class="px-3 py-2.5 text-right tabular-nums">{{ d.power_on_hours == null ? "—" : `${d.power_on_hours} h` }}</td>
+                  <td class="px-3 py-2.5 text-right tabular-nums">{{ d.wear_pct == null ? "—" : `${d.wear_pct}%` }}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4 text-center">
-            <p class="mb-1 text-xs text-[var(--muted)]">写入速度</p>
-            <p class="text-3xl font-bold tabular-nums text-[var(--text-strong)]">
-              {{ fmtMbps(diskRes?.write_mbps) }}
-              <span class="ml-1 text-sm font-normal text-[var(--muted)]">MB/s</span>
-            </p>
-          </div>
-        </div>
-        <p v-if="!diskRes && !diskTesting" class="mt-2 text-xs text-[var(--muted)]">
-          选择目标磁盘分区后开始顺序读写测速
-        </p>
-      </Card>
-    </div>
-
-    <!-- ===== 磁盘健康 ===== -->
-    <p class="mb-3 mt-6 text-xs font-semibold tracking-wider text-[var(--muted)]">磁盘健康</p>
-    <Card class="p-5">
-      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div class="flex items-center gap-2">
-          <HardDrive class="h-4 w-4 text-[var(--primary)]" />
-          <h4 class="font-semibold">磁盘健康（SMART）</h4>
-          <span v-if="smartRead && !smartFailed" class="text-xs font-normal text-[var(--muted)]">
-            {{ smartDisks.length }} 块磁盘
-          </span>
-        </div>
-        <Button variant="gray" size="sm" :disabled="smartLoading" @click="readSmart">
-          <RefreshCw class="h-3.5 w-3.5" :class="smartLoading && 'animate-spin'" />
-          {{ smartRead ? "重新读取 SMART" : "读取 SMART" }}
-        </Button>
+        </Card>
       </div>
 
-      <!-- 读取中 -->
-      <Spinner v-if="smartLoading" label="正在读取磁盘 SMART 信息…" />
-
-      <!-- 读取失败：灰色提示 -->
+      <!-- 压测：跟对应分类页共用同一块，避免两套状态 -->
       <div
-        v-else-if="smartFailed"
-        class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] px-4 py-6 text-center text-sm text-[var(--muted)]"
+        v-show="tab === 'cpu' || tab === 'board' || tab === 'gpu' || tab === 'disk' || tab === 'stress'"
+        class="mt-4 grid grid-cols-1 gap-5"
+        :class="tab === 'stress' && 'lg:grid-cols-2'"
       >
-        读取失败：需要管理员权限或硬盘不支持 SMART
-      </div>
+        <Card v-show="tab === 'cpu' || tab === 'stress'" class="p-5">
+          <div class="mb-4 flex items-center gap-2">
+            <Flame class="h-4 w-4 text-[var(--primary)]" />
+            <h4 class="font-semibold">CPU 烤机</h4>
+          </div>
+          <div class="mb-3 flex flex-wrap items-center gap-3">
+            <Select v-model="cpuDur" :options="BURN_OPTS" class="w-36" />
+            <div class="flex-1" />
+            <Button variant="primary" size="sm" :disabled="cpuRunning" @click="cpuStart"><Play class="h-3.5 w-3.5" /> 开始</Button>
+            <Button variant="danger" size="sm" :disabled="!cpuRunning" @click="cpuStop"><Square class="h-3.5 w-3.5" /> 停止</Button>
+          </div>
+          <Progress :value="cpuPct" :tone="cpuPct >= 100 ? 'success' : 'warning'" />
+          <div class="mt-2 flex items-center justify-between gap-2 text-xs text-[var(--muted)]">
+            <span>{{ cpuRunning ? "烤机进行中，请留意温度" : "多线程满载，到时自动停" }}</span>
+            <span v-if="cpuRunning" class="font-mono font-semibold tabular-nums text-[var(--text)]">剩余 {{ fmtCountdown(cpuRemain) }}</span>
+          </div>
+        </Card>
 
-      <!-- 未读取 -->
-      <div v-else-if="!smartRead" class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] px-4 py-6 text-center text-sm text-[var(--muted)]">
-        点击「读取 SMART」获取磁盘健康状态、温度与磨损信息
-      </div>
+        <Card v-show="tab === 'gpu' || tab === 'stress'" class="p-5">
+          <div class="mb-4 flex items-center gap-2">
+            <Zap class="h-4 w-4 text-[#a78bfa]" />
+            <h4 class="font-semibold">GPU 烤机</h4>
+          </div>
+          <div class="mb-3 flex flex-wrap items-center gap-3">
+            <Select v-model="gpuDur" :options="BURN_OPTS" class="w-36" />
+            <div class="flex-1" />
+            <Button variant="primary" size="sm" :disabled="gpuRunning || !!gpuError" @click="gpuStart"><Play class="h-3.5 w-3.5" /> 开始</Button>
+            <Button variant="danger" size="sm" :disabled="!gpuRunning" @click="gpuStop"><Square class="h-3.5 w-3.5" /> 停止</Button>
+          </div>
+          <div class="h-2 w-full overflow-hidden rounded-full bg-[var(--btn-gray)]">
+            <div class="h-full rounded-full transition-[width] duration-200" :style="{ width: `${Math.min(100, Math.max(0, gpuPct))}%`, background: 'linear-gradient(90deg, #7c3aed, #a78bfa)' }" />
+          </div>
+          <p v-if="gpuError" class="mt-2 text-xs text-[#e5484d]">GPU 烤机出错：{{ gpuError }}</p>
+          <div v-else class="mt-2 flex items-center justify-between gap-2 text-xs text-[var(--muted)]">
+            <span>{{ gpuRunning ? "GPU 压测进行中" : "计算着色器满载，到时自动停" }}</span>
+            <span v-if="gpuRunning" class="font-mono font-semibold tabular-nums text-[var(--text)]">FPS {{ gpuFps }} · {{ fmtCountdown(gpuRemain) }}</span>
+          </div>
+        </Card>
 
-      <!-- 空列表 -->
-      <div v-else-if="smartDisks.length === 0" class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] px-4 py-6 text-center text-sm text-[var(--muted)]">
-        未发现磁盘
-      </div>
+        <Card v-show="tab === 'board' || tab === 'stress'" class="p-5">
+          <div class="mb-4 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <MemoryStick class="h-4 w-4 text-[var(--primary)]" />
+              <h4 class="font-semibold">内存测试</h4>
+            </div>
+            <Button variant="primary" size="sm" :disabled="memRunning" @click="memStart">
+              <Loader2 v-if="memRunning" class="h-3.5 w-3.5 animate-spin" />
+              <Play v-else class="h-3.5 w-3.5" />
+              {{ memRunning ? "测试中" : "开始" }}
+            </Button>
+          </div>
+          <Progress :value="memPctTest" :tone="memResult ? (memResult.errors === 0 ? 'success' : 'danger') : 'primary'" />
+          <div
+            v-if="memResult"
+            class="mt-3 rounded-xl border p-3 text-center"
+            :class="memResult.errors === 0 ? 'border-[#30a46c]/40 bg-[#30a46c]/10' : 'border-[#e5484d]/40 bg-[#e5484d]/10'"
+          >
+            <p class="font-bold" :class="memResult.errors === 0 ? 'text-[#30a46c]' : 'text-[#e5484d]'">
+              {{ memResult.errors === 0 ? "无错误" : `发现 ${memResult.errors} 个错误` }}
+            </p>
+            <p class="mt-1 text-xs text-[var(--muted)]">{{ memResult.blocks_total }} 块 · {{ memResult.seconds }} 秒</p>
+          </div>
+          <p v-else class="mt-2 text-xs text-[var(--muted)]">
+            {{ memRunning ? `进度 ${Math.round(memPctTest)}%${memErrors ? `，错误 ${memErrors}` : ""}` : "写入固定图案和随机图案后读回校验" }}
+          </p>
+        </Card>
 
-      <!-- SMART 表格 -->
-      <div v-else class="overflow-x-auto rounded-xl border border-[var(--card-border)]">
-        <table class="w-full min-w-[720px] text-left text-xs">
-          <thead>
-            <tr class="border-b border-[var(--card-border)] bg-[var(--card-soft)] text-[var(--muted)]">
-              <th class="px-3 py-2.5 font-medium">型号</th>
-              <th class="px-3 py-2.5 font-medium">序列号</th>
-              <th class="px-3 py-2.5 font-medium">总线</th>
-              <th class="px-3 py-2.5 font-medium">介质</th>
-              <th class="px-3 py-2.5 font-medium">健康状态</th>
-              <th class="px-3 py-2.5 text-right font-medium">温度℃</th>
-              <th class="px-3 py-2.5 text-right font-medium">通电小时</th>
-              <th class="px-3 py-2.5 text-right font-medium">损耗%</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-[var(--card-border)]">
-            <tr v-for="(d, i) in smartDisks" :key="`${d.serial}-${i}`" class="transition-colors hover:bg-[var(--card-soft)]">
-              <td class="max-w-[180px] truncate px-3 py-2.5 font-medium text-[var(--text-strong)]" :title="d.model">
-                {{ d.model || "—" }}
-              </td>
-              <td class="px-3 py-2.5 font-mono">{{ d.serial || "—" }}</td>
-              <td class="px-3 py-2.5">{{ d.bus_type || "—" }}</td>
-              <td class="px-3 py-2.5">{{ d.media || "—" }}</td>
-              <td class="px-3 py-2.5 font-semibold" :class="healthMeta(smartHealthText(d)).cls">
-                {{ healthMeta(smartHealthText(d)).label }}
-              </td>
-              <td class="px-3 py-2.5 text-right tabular-nums" :class="diskTempClass(d.temperature_c)">
-                {{ d.temperature_c == null ? "—" : `${d.temperature_c}` }}
-              </td>
-              <td class="px-3 py-2.5 text-right tabular-nums">
-                {{ d.power_on_hours == null ? "—" : `${d.power_on_hours} h` }}
-              </td>
-              <td class="px-3 py-2.5 text-right tabular-nums">
-                {{ d.wear_pct == null ? "—" : `${d.wear_pct}%` }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </Card>
+        <Card v-show="tab === 'disk' || tab === 'stress'" class="p-5">
+          <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <HardDrive class="h-4 w-4 text-[var(--primary)]" />
+              <h4 class="font-semibold">磁盘测速</h4>
+            </div>
+            <div class="flex items-center gap-2">
+              <Select v-model="diskSel" :options="driveOpts" class="w-28" />
+              <Button variant="primary" size="sm" :disabled="diskTesting" @click="runDiskSpeed">
+                <Loader2 v-if="diskTesting" class="h-3.5 w-3.5 animate-spin" />
+                <Play v-else class="h-3.5 w-3.5" />
+                {{ diskTesting ? "测速中" : "开始" }}
+              </Button>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3 text-center">
+              <p class="text-[10px] text-[var(--muted)]">读取</p>
+              <p class="text-2xl font-bold tabular-nums">{{ fmtMbps(diskRes?.read_mbps) }}<span class="ml-1 text-xs font-normal text-[var(--muted)]">MB/s</span></p>
+            </div>
+            <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3 text-center">
+              <p class="text-[10px] text-[var(--muted)]">写入</p>
+              <p class="text-2xl font-bold tabular-nums">{{ fmtMbps(diskRes?.write_mbps) }}<span class="ml-1 text-xs font-normal text-[var(--muted)]">MB/s</span></p>
+            </div>
+          </div>
+          <p class="mt-2 text-[10px] text-[var(--muted)]">顺序读写 512MB，会占用目标盘空间，测完删除临时文件</p>
+        </Card>
 
-    <!-- ===== 屏幕测试 ===== -->
-    <p class="mb-3 mt-6 text-xs font-semibold tracking-wider text-[var(--muted)]">屏幕测试</p>
-    <Card class="p-5">
-      <div class="mb-3 flex items-center gap-2">
-        <Grid3x3 class="h-4 w-4 text-[var(--primary)]" />
-        <h4 class="font-semibold">坏点检测</h4>
+        <Card v-show="tab === 'gpu' || tab === 'stress'" class="p-5">
+          <div class="mb-3 flex items-center gap-2">
+            <Grid3x3 class="h-4 w-4 text-[var(--primary)]" />
+            <h4 class="font-semibold">坏点检测</h4>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <Button v-for="c in PIXEL_COLORS" :key="c.value" variant="gray" size="sm" @click="pixelColor = c.value">
+              <span class="mr-1.5 inline-block h-3 w-3 rounded-full border border-[var(--card-border)]" :style="{ background: c.value }" />
+              {{ c.label }}
+            </Button>
+          </div>
+          <p class="mt-2 text-[10px] text-[var(--muted)]">全屏纯色，点击或按 Esc 退出</p>
+        </Card>
       </div>
-      <div class="flex flex-wrap items-center gap-3">
-        <Button
-          v-for="c in PIXEL_COLORS"
-          :key="c.value"
-          variant="gray"
-          size="sm"
-          class="!px-4"
-          @click="pixelColor = c.value"
-        >
-          <span class="mr-1.5 inline-block h-3 w-3 rounded-full border border-[var(--card-border)]" :style="{ background: c.value }" />
-          {{ c.label }}
-        </Button>
-        <span class="text-xs text-[var(--muted)]">点击颜色进入全屏纯色模式，按 Esc 或点击屏幕退出</span>
-      </div>
-    </Card>
+    </template>
 
-    <!-- 全屏坏点检测覆盖层 -->
     <div
       v-if="pixelColor"
       class="fixed inset-0 z-[9999] cursor-pointer"
