@@ -6,7 +6,7 @@ Windows 一站式系统运维工具箱：批量软件安装、本机软件清单
 
 ## 下载
 
-最新正式版：**v1.0.0** → [前往 Releases 下载](../../releases/latest)
+最新正式版：**v1.0.0** → [前往 Releases 下载](https://github.com/LzxkJ04/jiwei-toolbox/releases/latest)
 
 | 文件 | 说明 | 大小 |
 |---|---|---|
