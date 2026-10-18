@@ -1,9 +1,16 @@
 <script setup lang="ts">
-import { ChevronsLeft, ChevronsRight } from "lucide-vue-next";
+import { computed } from "vue";
+import { ChevronsLeft, ChevronsRight, Moon, Sun } from "lucide-vue-next";
 import { NAV_ITEMS, useRouteStore } from "../stores/route";
+import { useThemeStore } from "../stores/theme";
 import { cn } from "../lib/utils";
 
 const route = useRouteStore();
+const theme = useThemeStore();
+const isDark = computed(() => (theme.mode === "system" ? true : theme.mode === "dark"));
+function toggleTheme() {
+  theme.setMode(isDark.value ? "light" : "dark");
+}
 </script>
 
 <template>
@@ -42,6 +49,17 @@ const route = useRouteStore();
       </button>
     </nav>
 
+    <!-- 主题切换 + 折叠开关 -->
+    <button
+      :title="isDark ? '切换到浅色模式' : '切换到深色模式'"
+      class="mx-2.5 mb-2 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-[var(--card-border)] py-1.5 text-xs text-[var(--muted)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+      :class="route.collapsed && 'justify-center'"
+      @click="toggleTheme"
+    >
+      <Moon v-if="isDark" class="h-4 w-4" />
+      <Sun v-else class="h-4 w-4" />
+      <span v-if="!route.collapsed">{{ isDark ? "深色模式" : "浅色模式" }}</span>
+    </button>
     <!-- 折叠开关 -->
     <button
       :title="route.collapsed ? '展开侧栏' : '折叠侧栏'"

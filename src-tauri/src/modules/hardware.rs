@@ -85,9 +85,17 @@ fn disks_info() -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
     ))
     .iter()
     .map(|d| {
+        // Win32_DiskDrive.Size 可能是字符串数字
+        let size_raw = d.get("Size").cloned().unwrap_or(serde_json::Value::Null);
+        let size_b = match &size_raw {
+            serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
+            serde_json::Value::String(st) => st.trim().parse::<f64>().unwrap_or(0.0),
+            _ => 0.0,
+        };
         json!({
             "model": jstr(d, "Model", "未知"),
-            "capacity_gb": (jnum(d, "Size", 0.0) / 1073741824.0).round() as u64,
+            "capacity_gb": (size_b / 1073741824.0).round() as u64,
+            "size": size_b as u64,
         })
     })
     .collect();
@@ -120,21 +128,36 @@ fn bios_info() -> (String, String, String, String) {
     (mfr, product, ver, date)
 }
 
-/// 显卡列表（注册表显示适配器类设备 DriverDesc）
-fn gpu_list() -> Vec<String> {
-    let mut out = Vec::new();
-    let base = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
-    if let Ok(k) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(base) {
-        for sub in k.enum_keys().flatten() {
-            if let Ok(sk) = k.open_subkey(&sub) {
-                if let Ok(desc) = sk.get_value::<String, _>("DriverDesc") {
-                    if !desc.trim().is_empty() {
-                        out.push(desc);
+/// 显卡列表（WMI Win32_VideoController：名称 + 显存）
+fn gpu_list() -> Vec<serde_json::Value> {
+    let arr = as_array(ps_json(
+        r#"@(Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM) | ConvertTo-Json -Compress"#,
+    ));
+    let mut out: Vec<serde_json::Value> = arr
+        .iter()
+        .map(|g| {
+            let name = jstr(g, "Name", "");
+            let vram = jnum(g, "AdapterRAM", 0.0) as u64;
+            json!({ "name": if name.trim().is_empty() { "未知显卡".into() } else { name }, "vram": vram })
+        })
+        .collect();
+    // WMI 查询失败时回退：注册表 DriverDesc（无显存信息）
+    if out.is_empty() {
+        let base = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+        if let Ok(k) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(base) {
+            for sub in k.enum_keys().flatten() {
+                if let Ok(sk) = k.open_subkey(&sub) {
+                    if let Ok(desc) = sk.get_value::<String, _>("DriverDesc") {
+                        if !desc.trim().is_empty() {
+                            out.push(json!({ "name": desc, "vram": 0 }));
+                        }
                     }
                 }
             }
         }
     }
+    // 去重
+    out.dedup_by(|a, b| a["name"] == b["name"]);
     out
 }
 
@@ -164,11 +187,18 @@ pub async fn hw_info() -> serde_json::Value {
     }
     let (disks, volumes) = disks_info();
 
+    let board = [board_mfr.trim(), board_product.trim()]
+        .iter()
+        .filter(|x| !x.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
     json!({
-        "cpu": { "brand": brand, "cores": cores, "threads": threads },
-        "memoryTotal": memory_total,
+        "cpu": { "name": brand, "cores": cores, "threads": threads },
+        "memory_total": memory_total,
         "memoryModules": memory_modules,
         "motherboard": { "manufacturer": board_mfr, "product": board_product },
+        "board": board,
         "bios": { "version": bios_ver, "date": bios_date },
         "gpus": gpus,
         "disks": disks,
