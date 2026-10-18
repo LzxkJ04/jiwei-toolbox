@@ -10,8 +10,8 @@ Windows 一站式系统运维工具箱：批量软件安装、本机软件清单
 
 | 文件 | 说明 | 大小 |
 |---|---|---|
-| `极维工具箱_Setup.exe` | 安装版，写入 `C:\Program Files\极维工具箱`，带开始菜单与桌面快捷方式、卸载程序 | 7.93 MB |
-| `极维工具箱_便携单文件.exe` | 便携版，无需安装，双击即用；建议以 `--portable` 参数启动 | 20.73 MB |
+| `JiweiToolbox-1.0.0-setup.exe` | 安装版，写入 `C:\Program Files\极维工具箱`，带开始菜单与桌面快捷方式、卸载程序 | 7.93 MB |
+| `JiweiToolbox-1.0.0-portable.exe` | 便携版，无需安装，双击即用；建议以 `--portable` 参数启动 | 20.73 MB |
 | `SHA256_hash.txt` | 两个安装包的 SHA256 校验值 | — |
 
 下载后请用 `Get-FileHash` 或 `certutil -hashfile` 核对 SHA256，与校验文件一致再进行安装。完整更新日志见 [CHANGELOG.md](CHANGELOG.md)。

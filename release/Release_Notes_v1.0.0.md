@@ -38,8 +38,8 @@ Windows 系统运维工具箱 | Tauri 2 + Vue 3
 
 | 文件 | 说明 |
 |---|---|
-| 极维工具箱_Setup.exe | 安装版，写入 Program Files，带快捷方式与卸载程序 |
-| 极维工具箱_便携单文件.exe | 便携版，无需安装，建议加 `--portable` 启动 |
+| JiweiToolbox-1.0.0-setup.exe | 安装版，写入 Program Files，带快捷方式与卸载程序 |
+| JiweiToolbox-1.0.0-portable.exe | 便携版，无需安装，建议加 `--portable` 启动 |
 | SHA256_hash.txt | 两个文件的校验值 |
 
 ## 使用须知

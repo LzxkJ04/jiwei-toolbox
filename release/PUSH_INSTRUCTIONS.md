@@ -47,8 +47,8 @@ git push
 - 正文：直接粘贴 `release/Release_Notes_v1.0.0.md` 的内容
 - 正式版不要勾选 pre-release
 - 上传三个附件（拖入即可）：
-  - `release/极维工具箱_便携单文件.exe`
-  - `release/极维工具箱_Setup.exe`
+  - `release/JiweiToolbox-1.0.0-portable.exe`
+  - `release/JiweiToolbox-1.0.0-setup.exe`
   - `release/SHA256_hash.txt`
 
 发布后从页面实际下载一次，核对 SHA256 与 `SHA256_hash.txt` 一致。
@@ -67,11 +67,11 @@ git push
 ## 6. 当前附件校验值
 
 ```
-极维工具箱_便携单文件.exe
+JiweiToolbox-1.0.0-portable.exe
   21740544 字节
   09ADA62DBFF7F10C6227E9EFF0E61686B5CE942602FC14846F204C12341673D8
 
-极维工具箱_Setup.exe
+JiweiToolbox-1.0.0-setup.exe
   8317344 字节
   01EC4A66D8EC0C9F01E37A3121681BF7B5F32A2DC8594CB41313702BC5FA29DC
 ```
