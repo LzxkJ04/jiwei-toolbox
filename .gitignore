@@ -10,10 +10,21 @@ src-tauri/resources/jiwei-logic.exe
 release/*.exe
 release/*.zip
 
-# 本地运行产物与用户数据（勿提交）
-备份导出/
-缓存/
+# 运行时用户数据目录（配置、缓存、备份导出），由程序运行时生成
 配置/
+缓存/
+备份导出/
 backup/
 config/
+
+# 本地测试残留
 UsersAdministratorAppDataLocalTemp*/
+
+# 工作区内部笔记，不对外公开
+.workbuddy/
+
+# 系统与编辑器杂项
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.swp
