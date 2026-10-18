@@ -322,6 +322,7 @@ pub fn run() {
             uninstall::process_running,
             uninstall::kill_process,
             uninstall::run_uninstaller,
+            uninstall::measure_app_sizes,
             inventory::save_inventory,
             inventory::list_inventories,
             inventory::load_inventory,

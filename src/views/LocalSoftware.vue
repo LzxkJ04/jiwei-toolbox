@@ -15,8 +15,8 @@ import Spinner from "../components/ui/Spinner.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import type { InstalledApp, ResidualItem, UwpApp } from "../lib/tauri";
 import {
-  listInstalled, listUwp, openPath, removeResidual, removeUwp, runUninstaller, scanResidual,
-  processRunning, killProcess,
+  listInstalled, listUwp, measureAppSizes, openPath, removeResidual, removeUwp, runUninstaller,
+  scanResidual, processRunning, killProcess,
 } from "../lib/tauri";
 import { copyText, formatBytes } from "../lib/utils";
 import { toast } from "../lib/toast";
@@ -33,6 +33,30 @@ async function refresh() {
   apps.value = a ?? [];
   uwpApps.value = u ?? [];
   refreshing.value = false;
+  // 后台补算体积：EstimatedSize 为 0 的软件按安装目录实测
+  void fillSizes();
+}
+
+/** 有多少软件还没体积，供按钮展示 */
+const measuredCount = ref(0);
+const measuring = ref(false);
+
+async function fillSizes() {
+  if (measuring.value) return;
+  measuring.value = true;
+  try {
+    const pairs = await measureAppSizes();
+    if (pairs.length && apps.value) {
+      const map = new Map(pairs);
+      apps.value = apps.value.map((a) => {
+        const bytes = map.get(a.key);
+        return bytes ? { ...a, size_estimate: bytes } : a;
+      });
+      measuredCount.value = pairs.length;
+    }
+  } finally {
+    measuring.value = false;
+  }
 }
 onMounted(refresh);
 
@@ -459,6 +483,10 @@ function clearQueue() {
       <span>{{ (apps ?? []).length }} 个桌面软件 · {{ (uwpApps ?? []).length }} 个 UWP</span>
       <span>估算占用 {{ formatBytes(totalSize) }}</span>
       <span>可静默卸载 {{ silentCount }} 个</span>
+      <span v-if="measuring" class="flex items-center gap-1">
+        <Loader2 class="h-3 w-3 animate-spin" /> 正在实测体积…
+      </span>
+      <span v-else-if="measuredCount" class="text-[#30a46c]">已实测补全 {{ measuredCount }} 个软件体积</span>
     </div>
 
     <!-- 顶部栏：搜索 + 筛选 + 刷新 -->

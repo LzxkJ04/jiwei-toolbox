@@ -55,6 +55,78 @@ fn enum_root(root: HKEY, path: &str, label: &str, out: &mut Vec<InstalledApp>) {
     }
 }
 
+/// 从卸载命令里猜安装目录（"C:\App\unins000.exe" /X 或裸路径）
+fn dir_from_uninstaller(cmd: &str) -> Option<std::path::PathBuf> {
+    let t = cmd.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let exe = if let Some(rest) = t.strip_prefix('"') {
+        rest.split('"').next()?.to_string()
+    } else {
+        t.split_whitespace().next()?.to_string()
+    };
+    if !exe.to_ascii_lowercase().ends_with(".exe") {
+        return None;
+    }
+    let p = std::path::Path::new(&exe);
+    p.parent().filter(|d| d.exists()).map(|d| d.to_path_buf())
+}
+
+/// 目录体积（递归，设上限防止在超大目录上卡住）
+fn dir_bytes(dir: &std::path::Path, budget: &mut u64) -> u64 {
+    let mut total = 0u64;
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    for e in rd.flatten() {
+        if *budget == 0 {
+            break;
+        }
+        *budget -= 1;
+        let Ok(md) = e.metadata() else { continue };
+        if md.file_type().is_symlink() {
+            continue;
+        }
+        if md.is_dir() {
+            total += dir_bytes(&e.path(), budget);
+        } else if md.is_file() {
+            total += md.len();
+        }
+    }
+    total
+}
+
+/// 补算体积：优先用安装目录实测，其次用卸载器所在目录；EstimatedSize 为 0 时才补。
+/// 单独做成命令，避免 list_installed 变慢——它是列表页首屏依赖。
+#[tauri::command]
+pub async fn measure_app_sizes() -> Vec<(String, u64)> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let apps = list_installed_inner();
+        let mut out = Vec::new();
+        for a in apps {
+            if a.size_estimate > 0 {
+                continue;
+            }
+            let dir = if !a.install_location.trim().is_empty() {
+                // InstallLocation 有时被写成带引号的形式："C:\Program Files\x"
+                let raw = a.install_location.trim().trim_matches('"');
+                let p = std::path::PathBuf::from(raw);
+                p.is_dir().then_some(p)
+            } else {
+                dir_from_uninstaller(&a.uninstaller)
+            };
+            let Some(dir) = dir else { continue };
+            let mut budget = 60_000u64;
+            let bytes = dir_bytes(&dir, &mut budget);
+            if bytes > 0 {
+                out.push((a.key, bytes));
+            }
+        }
+        out
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// 枚举已安装软件（HKLM + WOW6432Node + HKCU 的 Uninstall 键）
 #[tauri::command]
 pub(crate) fn list_installed_inner() -> Vec<InstalledApp> {

@@ -232,10 +232,29 @@ pub fn inst_finish(run: bool, open_cfg: bool) {
     let data_dir = INSTALL_DATA_DIR.lock().ok().and_then(|s| s.clone());
 
     if run {
+        let mut started = false;
+        let mut reason = String::new();
         if let Some(dir) = &dir {
             let exe = PathBuf::from(dir).join(APP_EXE_NAME);
-            // spawn 后立刻 drop Child：子进程独立于安装壳继续运行
-            let _ = Command::new(&exe).spawn();
+            if !exe.exists() {
+                reason = format!("主程序不存在：{}", exe.display());
+            } else {
+                match Command::new(&exe).spawn() {
+                    Ok(_) => started = true,
+                    Err(e) => reason = format!("启动失败：{e}"),
+                }
+            }
+        } else {
+            reason = "未记录安装目录".to_string();
+        }
+        // 启动不了就说清楚，别让安装窗口无声消失
+        if !started {
+            let _ = Command::new("mshta")
+                .arg(format!(
+                    "javascript:alert('安装已完成，但自动启动失败。\\n\\n{}\\n\\n请从桌面或开始菜单手动打开。');close()",
+                    reason.replace('\'', " ")
+                ))
+                .spawn();
         }
     }
     if open_cfg {

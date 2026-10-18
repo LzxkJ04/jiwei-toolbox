@@ -514,6 +514,8 @@ export const scanResidual = (name: string) => tryCall<ResidualItem[]>("scan_resi
 export const removeResidual = (items: ResidualItem[]) => tryCall<null>("remove_residual", { items });
 /** 启动枚举出来的卸载程序；只接受 msiexec /X 或已存在的 exe 路径 */
 export const runUninstaller = (command: string) => invoke<string>("run_uninstaller", { command });
+/** 补算体积：返回 [注册表键, 字节] 对，只包含 EstimatedSize 为 0 且能测到目录的项 */
+export const measureAppSizes = () => invoke<[string, number][]>("measure_app_sizes").catch(() => []);
 /** 按名称匹配正在运行的进程，返回 PID 列表（无匹配为空数组；调用失败返回 null，视为"未知"） */
 export const processRunning = (name: string) => tryCall<number[]>("process_running", { name });
 /** 结束指定进程，返回成功/失败 PID 分组 */
