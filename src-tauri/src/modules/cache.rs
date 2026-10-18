@@ -294,3 +294,75 @@ mod tests {
         assert!(!is_thumbcache_file(""));
     }
 }
+
+/// 清理指定任务的下载缓存（`缓存\downloads\{id}.exe`）。
+///
+/// 只接受软件 id，不接受任意路径 —— 调用方无法借它删除缓存目录以外的东西。
+/// id 里若含路径分隔符或 `..` 直接拒绝，防止拼接穿越。
+#[tauri::command]
+pub async fn clean_task_cache(ids: Vec<String>) -> Result<u64, String> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    if ids.len() > 500 {
+        return Err("单次最多清理 500 个任务的缓存".into());
+    }
+    // 先整体校验，避免删到一半才报错
+    for id in &ids {
+        if id.trim().is_empty() {
+            return Err("任务 id 不能为空".into());
+        }
+        if id.contains('/') || id.contains('\\') || id.contains("..") || id.contains(':') {
+            return Err(format!("任务 id 含非法字符: {id}"));
+        }
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let dirs = crate::dirs::load_dirs();
+        let dl_dir = Path::new(&dirs.cache).join("downloads");
+        let mut freed = 0u64;
+        for id in ids {
+            // 下载文件名固定为 {id}.exe，同时清掉可能存在的 .part / .tmp
+            for ext in ["exe", "part", "tmp"] {
+                let p = dl_dir.join(format!("{}.{}", id.trim(), ext));
+                if let Ok(md) = std::fs::metadata(&p) {
+                    let size = md.len();
+                    if std::fs::remove_file(&p).is_ok() {
+                        freed += size;
+                    }
+                }
+            }
+        }
+        Ok(freed)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod task_cache_tests {
+    /// 与 clean_task_cache 内的校验保持一致：拒绝穿越与分隔符
+    fn id_is_safe(id: &str) -> bool {
+        !id.trim().is_empty()
+            && !id.contains('/')
+            && !id.contains('\\')
+            && !id.contains("..")
+            && !id.contains(':')
+    }
+
+    #[test]
+    fn normal_ids_pass() {
+        assert!(id_is_safe("7zip"));
+        assert!(id_is_safe("k-lite"));
+        assert!(id_is_safe("vscode_2024"));
+    }
+
+    #[test]
+    fn traversal_is_rejected() {
+        assert!(!id_is_safe("../windows"));
+        assert!(!id_is_safe(r"..\windows"));
+        assert!(!id_is_safe(r"C:\Windows\notepad"));
+        assert!(!id_is_safe("sub/dir"));
+        assert!(!id_is_safe(""));
+        assert!(!id_is_safe("   "));
+    }}

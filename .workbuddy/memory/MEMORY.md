@@ -20,6 +20,12 @@
 - **Inno 侧**：ShouldSkipPage 全跳（WebView2 接管 UI）→ 直接 wpInstalling 跑 [Files]；CurProgressChanged 推进度到 JS；CurStepChanged 写 dirs.json/README/快捷方式（WScript.Shell COM）/兼容层/关联；WebView2 初始化失败 → 回退原生 Inno 向导（天然 fallback）。静默 /VERYSILENT /DIR= 原生支持（不建 WebView2）。
 - **ui.html**：TailwindCSS（CDN + 内嵌完整兜底样式）、深浅主题（CSS vars）、页面 slide/fade、进度 shimmer、SVG 徽章。单文件 RCDATA/或 {tmp}。
 
+## 硬性禁止：不要动 Windows 外壳缓存（2026-10-18 事故）
+- 事故：为刷新图标，反复 `Stop-Process explorer` / 强杀 `sihost`、`StartMenuExperienceHost`、`ShellExperienceHost`，并删 `iconcache_*.db`、`thumbcache_*.db`、`IconCache.db` 与 `TrayNotify\IconStreams`、`PastIconsStream`。结果 explorer 启动即崩（ucrtbase.dll 异常 0xc0000409，偏移 0x7286e），winlogon 每 0.6 秒拉起一次，任务栏狂闪，只能重启电脑恢复。
+- 结论：**外壳缓存不是图标问题的解法**。图标改动只做两件事——改源文件（exe 资源 `icon.ico` + 托盘 `icons/32x32.png`）并重新编译，然后告知用户退出程序重开或注销。
+- 刷新外壳只用无副作用的：`ie4uinit.exe -show`、`SHChangeNotify`。**禁止**删除/重命名 `iconcache*`、`thumbcache*`、`IconCache.db`；**禁止**写或删 `TrayNotify`（IconStreams / PastIconsStream / PromotedIconCache）；**禁止**强杀 sihost 及各类 ShellExperienceHost。
+- 需要彻底重建缓存时，让用户自己重启，不要代劳。
+
 ## 占位主程序
 - src-tauri 源码丢失 → jiwei-toolbox.exe 暂用 Win32 占位 exe（显示版本信息），待重建 Tauri 应用后替换。payload 路径：src-tauri/target/release/jiwei-toolbox.exe。
 

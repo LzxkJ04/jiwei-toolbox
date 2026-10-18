@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { ChevronsLeft, ChevronsRight, Moon, Search, Sun } from "lucide-vue-next";
-import { NAV_ITEMS, useRouteStore } from "../stores/route";
+import { NAV_GROUPS, useRouteStore } from "../stores/route";
 import { useThemeStore } from "../stores/theme";
 import { cn } from "../lib/utils";
 
@@ -35,34 +35,55 @@ function openPalette() {
         <Search class="h-4 w-4 shrink-0" />
         <span v-if="!route.collapsed" class="truncate">搜索</span>
       </button>
-      <button
-        v-for="item in NAV_ITEMS"
-        :key="item.id"
-        :title="route.collapsed ? item.label : undefined"
-        :class="
-          cn(
-            'relative flex w-full cursor-pointer items-center gap-3 overflow-hidden rounded-lg py-2 text-sm transition-all duration-200',
-            route.collapsed ? 'justify-center px-0' : 'px-3',
-            route.active === item.id
-              ? 'bg-[var(--primary-soft)] font-semibold text-[var(--primary)]'
-              : 'text-[var(--text)] hover:bg-[var(--btn-gray)]'
-          )
-        "
-        @click="route.go(item.id)"
-      >
-        <!-- 选中项左侧指示条 -->
-        <span
-          aria-hidden
+      <template v-for="(group, gi) in NAV_GROUPS" :key="group.title || `g${gi}`">
+        <!-- 分组标题：折叠时隐藏，改用一条分隔线 -->
+        <p
+          v-if="group.title && !route.collapsed"
+          class="px-3 pb-0.5 pt-2 text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]"
+        >
+          {{ group.title }}
+        </p>
+        <div
+          v-else-if="group.title && route.collapsed && gi > 0"
+          class="mx-2 my-1.5 border-t border-[var(--card-border)]"
+        />
+        <button
+          v-for="item in group.items"
+          :key="item.id"
+          :title="route.collapsed ? item.label : undefined"
           :class="
             cn(
-              'absolute left-0 top-1/2 w-[3px] -translate-y-1/2 rounded-full bg-[var(--primary)] transition-all duration-200',
-              route.active === item.id ? 'h-5 opacity-100' : 'h-0 opacity-0'
+              'relative flex w-full cursor-pointer items-center gap-3 overflow-hidden rounded-lg py-2 text-sm transition-all duration-200',
+              route.collapsed ? 'justify-center px-0' : 'px-3',
+              route.active === item.id
+                ? 'bg-[var(--primary-soft)] font-semibold text-[var(--primary)]'
+                : 'text-[var(--text)] hover:bg-[var(--btn-gray)]'
             )
           "
-        />
-        <component :is="item.icon" class="h-5 w-5 shrink-0" />
-        <span v-if="!route.collapsed" class="truncate">{{ item.label }}</span>
-      </button>
+          @click="route.go(item.id)"
+        >
+          <!-- 选中项左侧指示条 -->
+          <span
+            aria-hidden
+            :class="
+              cn(
+                'absolute left-0 top-1/2 w-[3px] -translate-y-1/2 rounded-full bg-[var(--primary)] transition-all duration-200',
+                route.active === item.id ? 'h-5 opacity-100' : 'h-0 opacity-0'
+              )
+            "
+          />
+          <span
+            class="nav-ico"
+            :style="{
+              color: route.active === item.id ? 'var(--ico-on)' : `var(--ico-${Math.min(gi, 3)})`,
+              background: route.active === item.id ? 'var(--primary)' : `var(--ico-${Math.min(gi, 3)}-bg)`,
+            }"
+          >
+            <component :is="item.icon" class="h-3.5 w-3.5" />
+          </span>
+          <span v-if="!route.collapsed" class="truncate">{{ item.label }}</span>
+        </button>
+      </template>
     </nav>
 
     <!-- 主题切换 + 折叠开关 -->

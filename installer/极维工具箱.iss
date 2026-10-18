@@ -14,7 +14,7 @@
 ; ============================================================================
 
 #define MyAppName "极维工具箱"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "1.0.0"
 #define MyAppExe "jiwei-toolbox.exe"
 
 [Setup]
@@ -32,6 +32,12 @@ Compression=lzma2
 SolidCompression=yes
 OutputDir=..\dist
 OutputBaseFilename=jiwei-setup
+; 安装包自身的版本信息，与 MyAppVersion 保持同步（属性页可见）
+VersionInfoVersion={#MyAppVersion}
+VersionInfoProductName={#MyAppName}
+VersionInfoDescription={#MyAppName} 安装程序
+VersionInfoCompany={#MyAppName}
+VersionInfoCopyright=Copyright (C) 2026 {#MyAppName}
 WizardStyle=modern
 DisableProgramGroupPage=yes
 ; License 页仅在 WebView2 初始化失败的原生回退流程中显示

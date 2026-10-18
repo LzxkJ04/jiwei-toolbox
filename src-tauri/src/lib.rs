@@ -27,7 +27,7 @@ fn greet(name: &str) -> String {
     format!("你好, {}! 来自极维工具箱后端。", name)
 }
 
-use modules::{appicon, backup, cache, common, dirs, diskspace, drivers, filter, hardware, inventory, license, logs, maintenance, netclient, report, shellcmd, shortcuts, software, sysmon, sysquick, systools, taskopts, templates, uninstall, updater, webview2};
+use modules::{appicon, backup, cache, common, dirs, diskspace, drivers, errlog, filter, hardware, inventory, license, logs, maintenance, netclient, report, schedule, shellcmd, shortcuts, software, sources, sysmon, sysquick, systools, taskopts, taskstate, templates, uninstall, updater, webview2};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{MenuBuilder, MenuItem, PredefinedMenuItem},
@@ -122,6 +122,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .items(&[&show, &install, &sep, &pause, &resume, &clean, &logs, &sep2, &quit])
         .build()?;
 
+    // 托盘图标单独内嵌 32x32.png。改 png 后必须重编本文件，否则任务栏右键仍是旧图。
     TrayIconBuilder::with_id("main-tray")
         .icon(tauri::include_image!("icons/32x32.png"))
         .tooltip("极维工具箱")
@@ -277,6 +278,37 @@ pub fn run() {
             maintenance::uptime_info,
             maintenance::install_precheck,
             netclient::test_proxy,
+            // 软件源管理
+            sources::list_sources,
+            sources::save_source,
+            sources::delete_source,
+            sources::set_default_source,
+            sources::get_default_source,
+            sources::test_source,
+            sources::scan_local_source,
+            sources::export_sources,
+            sources::import_sources,
+            sources::test_source_connectivity,
+            // 定时自动备份
+            schedule::list_schedules,
+            schedule::save_schedule,
+            schedule::delete_schedule,
+            schedule::toggle_schedule,
+            schedule::run_schedule_now,
+            schedule::cleanup_old_backups,
+            schedule::get_schedule_status,
+            // 结构化日志与错误码
+            errlog::list_structured_logs,
+            errlog::append_structured_log,
+            errlog::query_structured_logs,
+            errlog::structured_log_stats,
+            errlog::error_code_table,
+            errlog::clear_structured_logs,
+            // 任务快照（崩溃恢复）
+            taskstate::save_queue_snapshot,
+            taskstate::load_queue_snapshot,
+            taskstate::mark_clean_exit,
+            taskstate::clear_queue_snapshot,
             // 黑白名单
             filter::get_filter_rules,
             filter::save_filter_rules,
@@ -296,6 +328,8 @@ pub fn run() {
             systools::list_startup,
             systools::list_disabled_startup,
             systools::toggle_startup,
+            systools::list_logon_tasks,
+            systools::set_logon_task,
             systools::list_services,
             systools::set_service,
             systools::read_hosts,
@@ -309,10 +343,15 @@ pub fn run() {
             systools::remove_uwp,
             systools::get_env_vars,
             systools::set_env_var,
+            systools::get_env_path_entries,
+            systools::set_env_path_entries,
             // 备份
             backup::create_backup,
             backup::list_backups,
             backup::restore_backup,
+            backup::list_config_profiles,
+            backup::backup_profiles,
+            backup::verify_backup,
             backup::export_config,
             backup::import_config,
             // 开机自动备份软件清单
@@ -323,6 +362,7 @@ pub fn run() {
             cache::clean_junk,
             cache::cache_stats,
             cache::clean_cache,
+            cache::clean_task_cache,
             // 缓存精细管理
             cache::cache_files,
             cache::cache_delete,
@@ -334,6 +374,7 @@ pub fn run() {
             // 日志保留策略
             logs::get_log_retention,
             logs::set_log_retention,
+            logs::export_logs_zip,
             // 引导壳多模式
             launcher::get_launch_mode,
             launcher::inst_choose_dir,
@@ -365,6 +406,7 @@ pub fn run() {
             hardware::disk_smart,
             hardware::cpu_temp,
             hardware::gpu_temp,
+            hardware::list_sensors,
             // 驱动清单
             drivers::driver_list,
             drivers::export_driver_list,
@@ -380,6 +422,8 @@ pub fn run() {
                 // 启动自动维护（后台线程）：日志按保留天数清理 + 开机自动备份软件清单
                 logs::startup_retention();
                 backup::startup_auto_inventory();
+                // 定时自动备份调度（每 60 秒检查一次）
+                schedule::start_scheduler();
             } else if launcher::detect_launch_mode() == launcher::LaunchMode::Repair {
                 // 修复模式：紧凑单卡窗口 720x520 禁 resize
                 if let Some(win) = app.get_webview_window("main") {

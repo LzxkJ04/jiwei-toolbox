@@ -238,6 +238,184 @@ pub async fn list_disabled_startup() -> Vec<DisabledStartup> {
         .collect()
 }
 
+// ---------- 登录计划任务（触发器为登录时） ----------
+
+/// 任务名/路径白名单：字母数字、中文、空格、下划线、点、斜杠、括号、连字符。
+/// 明确拒绝 `& | ; ` $`、引号和换行，避免拼进 PowerShell 单引号字面量后被打断。
+fn validate_task_token(s: &str) -> bool {
+    if s.trim().is_empty() {
+        return false;
+    }
+    s.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || is_han(c)
+            || matches!(c, ' ' | '_' | '.' | '/' | '\\' | '(' | ')' | '-' | '（' | '）')
+    })
+}
+
+fn is_han(c: char) -> bool {
+    ('\u{4E00}'..='\u{9FFF}').contains(&c) || ('\u{3400}'..='\u{4DBF}').contains(&c)
+}
+
+/// 单引号字面量：内部单引号加倍。调用方必须先通过 validate_task_token。
+fn quote_ps_literal(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// 固定脚本 + 已校验的单引号字面量。用户字符串不会出现在引号外。
+fn build_logon_task_command(task_path: &str, task_name: &str, enabled: bool) -> Result<String, String> {
+    if task_name.trim().is_empty() {
+        return Err("任务名不能为空".into());
+    }
+    if task_path.trim().is_empty() {
+        return Err("任务路径不能为空".into());
+    }
+    if !validate_task_token(task_path) || !validate_task_token(task_name) {
+        return Err("任务路径或名称含有非法字符".into());
+    }
+    let verb = if enabled {
+        "Enable-ScheduledTask"
+    } else {
+        "Disable-ScheduledTask"
+    };
+    Ok(format!(
+        "$ErrorActionPreference='Stop'; {verb} -TaskPath {} -TaskName {}",
+        quote_ps_literal(task_path),
+        quote_ps_literal(task_name)
+    ))
+}
+
+/// 无窗口 PowerShell：参数数组传 -Command，脚本本身由调用方固定拼好。
+fn run_powershell(script: &str) -> Result<std::process::Output, String> {
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd.output().map_err(|e| format!("无法执行 PowerShell：{e}"))
+}
+
+/// 与本仓库其他 PowerShell 调用一致：UTF-8（可带 BOM）或无控制台时的 UTF-16 LE。
+fn decode_ps_output(bytes: &[u8]) -> String {
+    let bytes = bytes.strip_prefix(&[0xFF, 0xFE]).unwrap_or(bytes);
+    let utf16 = bytes.len() >= 4 && bytes.len() % 2 == 0 && bytes[1] == 0 && bytes[3] == 0;
+    let text = if utf16 {
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    };
+    text.trim_start_matches('\u{feff}')
+        .trim_matches(|c: char| c.is_whitespace() || c == '\0')
+        .to_string()
+}
+
+fn ps_failure(out: &std::process::Output, action: &str) -> String {
+    let err = decode_ps_output(&out.stderr);
+    let err = if err.is_empty() { decode_ps_output(&out.stdout) } else { err };
+    let err = if err.is_empty() { "未知错误".to_string() } else { err };
+    format!("{action}：{err}")
+}
+
+fn state_label(s: &str) -> String {
+    match s {
+        "Ready" => "就绪".into(),
+        "Disabled" => "已禁用".into(),
+        "Running" => "运行中".into(),
+        other => other.to_string(),
+    }
+}
+
+fn json_field(v: &serde_json::Value, key: &str) -> String {
+    match v.get(key) {
+        Some(serde_json::Value::String(s)) => s.trim().to_string(),
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        Some(serde_json::Value::Null) | None => String::new(),
+        Some(other) => other.to_string().trim_matches('"').to_string(),
+    }
+}
+
+/// ConvertTo-Json 单元素可能退化成对象；空输出视为空列表。最多 200 条。
+fn parse_logon_tasks_json(text: &str) -> Result<Vec<serde_json::Value>, String> {
+    let text = text.trim();
+    if text.is_empty() || text == "null" {
+        return Ok(Vec::new());
+    }
+    let start = text
+        .find(['{', '['])
+        .ok_or_else(|| "解析登录计划任务失败：输出不是 JSON".to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&text[start..])
+        .map_err(|e| format!("解析登录计划任务失败：{e}"))?;
+    let arr = match v {
+        serde_json::Value::Array(a) => a,
+        serde_json::Value::Null => Vec::new(),
+        other => vec![other],
+    };
+    let mut out = Vec::new();
+    for item in arr {
+        if !item.is_object() {
+            continue;
+        }
+        let task_name = json_field(&item, "taskName");
+        let task_path = json_field(&item, "taskPath");
+        if task_name.is_empty() && task_path.is_empty() {
+            continue;
+        }
+        out.push(serde_json::json!({
+            "taskName": task_name,
+            "taskPath": task_path,
+            "state": state_label(&json_field(&item, "state")),
+            "author": json_field(&item, "author"),
+        }));
+        if out.len() >= 200 {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// 列出触发器为「登录时」的计划任务。
+#[tauri::command]
+pub async fn list_logon_tasks() -> Result<Vec<serde_json::Value>, String> {
+    // 固定脚本，不含用户输入。ConvertTo-Json -InputObject @($rows) 避免单元素退化成对象。
+    let script = r#"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[Console]::OutputEncoding; $tasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.Triggers | Where-Object { $_.CimClass.CimClassName -match 'Logon' } } | Select-Object -First 200); $rows = @(); foreach ($t in $tasks) { if (-not $t) { continue }; $st = [string]$t.State; $cn = switch ($st) { 'Ready' { '就绪' } 'Disabled' { '已禁用' } 'Running' { '运行中' } default { $st } }; $rows += [pscustomobject]@{ taskName = [string]$t.TaskName; taskPath = [string]$t.TaskPath; state = [string]$cn; author = [string]$t.Author } }; ConvertTo-Json -InputObject @($rows) -Compress"#;
+    let out = run_powershell(script)?;
+    if !out.status.success() {
+        return Err(ps_failure(&out, "读取登录计划任务失败"));
+    }
+    parse_logon_tasks_json(&decode_ps_output(&out.stdout))
+}
+
+/// 启用或禁用一条登录计划任务。task_path / task_name 只接受白名单字符。
+#[tauri::command]
+pub async fn set_logon_task(task_path: String, task_name: String, enabled: bool) -> Result<(), String> {
+    let script = build_logon_task_command(&task_path, &task_name, enabled)?;
+    let out = run_powershell(&script)?;
+    let action = if enabled { "启用" } else { "禁用" };
+    let r = if out.status.success() {
+        Ok(())
+    } else {
+        Err(ps_failure(&out, &format!("{action}登录计划任务失败")))
+    };
+    let dirs = crate::dirs::load_dirs();
+    let outcome = match &r {
+        Ok(_) => "成功".to_string(),
+        Err(e) => format!("失败: {e}"),
+    };
+    crate::logs::op_log(
+        &dirs,
+        "systools",
+        "set_logon_task",
+        &format!("{action} {task_path}{task_name}: {outcome}"),
+    );
+    r
+}
+
 // ---------- Windows 服务 ----------
 
 #[derive(Serialize, Deserialize)]
@@ -879,6 +1057,131 @@ fn broadcast_env_change() {
     }
 }
 
+// ---------- Path 条目化 ----------
+
+/// 按 `;` 拆 Path。空段丢弃，不剥引号、不去空格。
+fn split_path_entries(raw: &str) -> Vec<String> {
+    raw.split(';').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect()
+}
+
+/// 用 `;` 把条目拼回 Path。空列表得到空字符串。
+fn join_path_entries(entries: &[String]) -> String {
+    entries.join(";")
+}
+
+fn validate_path_entry(s: &str) -> Result<(), String> {
+    if s.is_empty() {
+        return Err("Path 条目不能为空".into());
+    }
+    if s.contains(';') {
+        return Err("Path 条目不能包含分号".into());
+    }
+    if s.contains('\n') || s.contains('\r') || s.contains('\0') {
+        return Err("Path 条目不能包含换行".into());
+    }
+    if s.chars().count() >= 260 {
+        return Err("Path 条目过长（须小于 260 字符）".into());
+    }
+    Ok(())
+}
+
+/// 新接口的 scope：user | machine。machine 对应现有系统环境变量键。
+fn path_hive_scope(scope: &str) -> Result<&'static str, String> {
+    match scope.trim() {
+        "user" => Ok("user"),
+        "machine" => Ok("system"),
+        _ => Err("scope 只能是 user 或 machine".into()),
+    }
+}
+
+fn read_registry_path(scope: &str) -> Result<String, String> {
+    let hive = path_hive_scope(scope)?;
+    let (root, sub) = env_hive(hive)?;
+    let key = RegKey::predef(root)
+        .open_subkey(sub)
+        .map_err(|e| format!("打开环境变量失败: {e}"))?;
+    match key.get_value::<String, _>("Path") {
+        Ok(v) => Ok(v),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("读取 Path 失败: {e}")),
+    }
+}
+
+fn path_write_error(is_machine: bool, e: &std::io::Error) -> String {
+    if is_machine {
+        format!("写入系统环境变量失败（需要以管理员身份运行）: {e}")
+    } else {
+        format!("写入环境变量失败: {e}")
+    }
+}
+
+fn write_registry_path(scope: &str, value: &str) -> Result<(), String> {
+    use winreg::types::ToRegValue;
+    let is_machine = scope.trim() == "machine";
+    let hive = path_hive_scope(scope)?;
+    let (root, sub) = env_hive(hive)?;
+    let key = RegKey::predef(root)
+        .open_subkey_with_flags(sub, KEY_READ | KEY_WRITE)
+        .map_err(|e| path_write_error(is_machine, &e))?;
+    let vtype = match key.get_raw_value("Path") {
+        Ok(raw) => {
+            let kind = raw.vtype.clone();
+            if kind != REG_SZ && kind != REG_EXPAND_SZ {
+                return Err("Path 的注册表类型不是字符串，已拒绝改写".into());
+            }
+            kind
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => REG_EXPAND_SZ,
+        Err(e) => return Err(path_write_error(is_machine, &e)),
+    };
+    // 只写 Path，保留原来的 REG_SZ / REG_EXPAND_SZ，不动同键下的其他变量。
+    let mut raw = value.to_reg_value();
+    raw.vtype = vtype;
+    key.set_raw_value("Path", &raw)
+        .map_err(|e| path_write_error(is_machine, &e))?;
+    Ok(())
+}
+
+/// 读取用户或系统 Path，拆成 {index, value, exists}。
+#[tauri::command]
+pub async fn get_env_path_entries(scope: String) -> Result<Vec<serde_json::Value>, String> {
+    let raw = read_registry_path(&scope)?;
+    let entries = split_path_entries(&raw);
+    let mut out = Vec::with_capacity(entries.len());
+    for (index, value) in entries.into_iter().enumerate() {
+        let exists = Path::new(&value).exists();
+        out.push(serde_json::json!({
+            "index": index,
+            "value": value,
+            "exists": exists,
+        }));
+    }
+    Ok(out)
+}
+
+/// 用 `;` 写回 Path，并广播环境变量变更。不删除 Path 以外的变量。
+#[tauri::command]
+pub async fn set_env_path_entries(scope: String, entries: Vec<String>) -> Result<(), String> {
+    let scope = scope.trim();
+    if scope != "user" && scope != "machine" {
+        return Err("scope 只能是 user 或 machine".into());
+    }
+    for (i, entry) in entries.iter().enumerate() {
+        validate_path_entry(entry).map_err(|e| format!("第 {} 条无效：{e}", i + 1))?;
+    }
+    let joined = join_path_entries(&entries);
+    write_registry_path(scope, &joined)?;
+    broadcast_env_change();
+    let dirs = crate::dirs::load_dirs();
+    crate::logs::op_log(
+        &dirs,
+        "env",
+        "set_path",
+        &format!("{scope} {} 条", entries.len()),
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,5 +1268,83 @@ mod tests {
         // 以 # 开头但内容不是 IP 的行不算条目
         let text = "# Copyright (c) 1993-2009 Microsoft Corp.\n# localhost name resolution\n";
         assert!(parse_hosts_entries(text).is_empty());
+    }
+
+    #[test]
+    fn validate_task_token_accepts_logon_names() {
+        assert!(validate_task_token(r"\Microsoft\Windows\"));
+        assert!(validate_task_token("登录任务"));
+        assert!(validate_task_token("My Task_1.0 (x64)"));
+        assert!(validate_task_token("foo-bar/baz"));
+        assert!(validate_task_token("（中文）"));
+    }
+
+    #[test]
+    fn validate_task_token_rejects_empty_and_shell_chars() {
+        assert!(!validate_task_token(""));
+        assert!(!validate_task_token("   "));
+        for bad in ["a&b", "a|b", "a;b", "a`b", "a$b", "a\nb", "a\rb", "a'b", "a\"b"] {
+            assert!(!validate_task_token(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn logon_task_script_embeds_only_quoted_literals() {
+        let script = build_logon_task_command(r"\Microsoft\Windows\", "登录任务", true).unwrap();
+        assert!(script.contains(
+            r"Enable-ScheduledTask -TaskPath '\Microsoft\Windows\' -TaskName '登录任务'"
+        ));
+        assert!(build_logon_task_command(r"\ok\", "a&b", false).is_err());
+        assert!(build_logon_task_command(r"\ok\", "", false).is_err());
+        assert!(build_logon_task_command(r"\ok\", "a\nb", true).is_err());
+        assert_eq!(quote_ps_literal("a'b"), "'a''b'");
+    }
+
+    #[test]
+    fn parse_logon_tasks_single_object_and_cap() {
+        let text = r#"{"taskName":"Sync","taskPath":"\\Foo\\","state":"Disabled","author":"NT"}"#;
+        let list = parse_logon_tasks_json(text).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["state"].as_str(), Some("已禁用"));
+        assert_eq!(list[0]["taskName"].as_str(), Some("Sync"));
+        assert!(parse_logon_tasks_json("").unwrap().is_empty());
+        assert!(parse_logon_tasks_json("null").unwrap().is_empty());
+        assert!(parse_logon_tasks_json("[null]").unwrap().is_empty());
+        let many = (0..205)
+            .map(|i| format!(r#"{{"taskName":"T{i}","taskPath":"\\","state":"Running","author":""}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let capped = parse_logon_tasks_json(&format!("[{many}]")).unwrap();
+        assert_eq!(capped.len(), 200);
+        assert_eq!(capped[0]["state"].as_str(), Some("运行中"));
+    }
+
+    #[test]
+    fn split_path_entries_drops_empty_keeps_quotes() {
+        assert_eq!(
+            split_path_entries(r#"C:\A;;"C:\Program Files";D:\bin;"#),
+            vec![r"C:\A", r#""C:\Program Files""#, r"D:\bin"]
+        );
+        assert!(split_path_entries("").is_empty());
+        assert!(split_path_entries(";;;").is_empty());
+        assert_eq!(split_path_entries("a; ;b"), vec!["a", " ", "b"]);
+    }
+
+    #[test]
+    fn join_path_entries_uses_semicolon() {
+        let entries = vec!["C:\\A".to_string(), "D:\\B".to_string()];
+        assert_eq!(join_path_entries(&entries), r"C:\A;D:\B");
+        assert_eq!(join_path_entries(&[]), "");
+        assert_eq!(split_path_entries(&join_path_entries(&entries)), entries);
+    }
+
+    #[test]
+    fn validate_path_entry_rejects_empty_semicolon_newline_and_long() {
+        assert!(validate_path_entry("").is_err());
+        assert!(validate_path_entry("a;b").is_err());
+        assert!(validate_path_entry("a\nb").is_err());
+        assert!(validate_path_entry(&"x".repeat(260)).is_err());
+        assert!(validate_path_entry(&"x".repeat(259)).is_ok());
+        assert!(validate_path_entry(r"C:\Program Files").is_ok());
     }
 }

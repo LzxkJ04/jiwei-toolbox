@@ -5,3 +5,15 @@ src-tauri/target/
 src-tauri/resources/jiwei-logic.exe
 *.log
 .wegrc
+
+# 发布附件目录：只上传到 Release，不进仓库
+release/*.exe
+release/*.zip
+
+# 本地运行产物与用户数据（勿提交）
+备份导出/
+缓存/
+配置/
+backup/
+config/
+UsersAdministratorAppDataLocalTemp*/

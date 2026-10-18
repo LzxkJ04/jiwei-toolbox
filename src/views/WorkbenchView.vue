@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import {
-  Activity, Cpu, FileSpreadsheet, FolderOpen, HardDrive, LayoutTemplate, ListChecks, Loader2,
-  Package, Play, RefreshCw, ShieldBan, ShieldCheck, Sparkles, Terminal, Trash2, Wrench,
+  Activity, AlarmClock, BookOpen, Cpu, FileSpreadsheet, FolderOpen, HardDrive, LayoutTemplate,
+  ListChecks, Loader2, Package, Play, RefreshCw, ScrollText, ServerCog, ShieldBan, ShieldCheck,
+  Sparkles, Terminal, Trash2, Wrench, type LucideIcon,
 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
@@ -14,7 +15,7 @@ import {
   getDirs, hwInfo, licenseStatus, loadTemplate, openPath, scanJunk, listTemplates,
   type Dirs, type HwInfo, type JunkItem, type LicenseStatus, type TemplateMeta,
 } from "../lib/tauri";
-import { useRouteStore } from "../stores/route";
+import { useRouteStore, type PageId } from "../stores/route";
 import { useTasksStore } from "../stores/tasks";
 import { useSoftwareStore } from "../stores/software";
 import { formatBytes } from "../lib/utils";
@@ -113,17 +114,45 @@ async function useTemplate(name: string) {
 }
 
 /** 快速工具卡片 */
-const QUICK_TOOLS = [
-  { id: "hardware", label: "硬件概览", desc: "CPU / 内存 / 显卡 / 磁盘", icon: Cpu, page: "hardware" },
-  { id: "local", label: "本机软件扫描", desc: "查看已安装软件与卸载", icon: Package, page: "local" },
-  { id: "diskspace", label: "磁盘空间分析", desc: "目录占用与重复文件", icon: HardDrive, page: "diskspace" },
-  { id: "monitor", label: "系统监控", desc: "实时占用与进程", icon: Activity, page: "monitor" },
-  { id: "systools", label: "系统工具", desc: "启动项 / 服务 / Hosts", icon: Wrench, page: "systools" },
-  { id: "quicktools", label: "快捷工具", desc: "端口 / 系统入口 / 关机", icon: Sparkles, page: "quicktools" },
-  { id: "shellcmd", label: "快捷命令", desc: "SFC / DISM / 网络诊断", icon: Terminal, page: "shellcmd" },
-  { id: "report", label: "系统信息导出", desc: "整机报告一键导出", icon: FileSpreadsheet, page: "report" },
-  { id: "filter", label: "黑白名单", desc: "保护系统组件不被误删", icon: ShieldBan, page: "filter" },
-] as const;
+interface QuickTool {
+  id: string;
+  label: string;
+  desc: string;
+  icon: LucideIcon;
+  page: PageId;
+}
+
+/** 13 个入口按职责分三组，避免挤成一团 */
+const QUICK_GROUPS: { title: string; tools: QuickTool[] }[] = [
+  {
+    title: "软件",
+    tools: [
+      { id: "local", label: "本机软件扫描", desc: "查看已安装软件与卸载", icon: Package, page: "local" },
+      { id: "sources", label: "软件源管理", desc: "在线清单与本地目录源", icon: ServerCog, page: "sources" },
+      { id: "filter", label: "黑白名单", desc: "保护系统组件不被误删", icon: ShieldBan, page: "filter" },
+      { id: "autobackup", label: "定时备份", desc: "按日 / 周 / 月自动打包", icon: AlarmClock, page: "autobackup" },
+    ],
+  },
+  {
+    title: "检测",
+    tools: [
+      { id: "hardware", label: "硬件概览", desc: "CPU / 内存 / 显卡 / 磁盘", icon: Cpu, page: "hardware" },
+      { id: "diskspace", label: "磁盘空间分析", desc: "目录占用与重复文件", icon: HardDrive, page: "diskspace" },
+      { id: "monitor", label: "系统监控", desc: "实时占用与进程", icon: Activity, page: "monitor" },
+      { id: "report", label: "系统信息导出", desc: "整机报告一键导出", icon: FileSpreadsheet, page: "report" },
+    ],
+  },
+  {
+    title: "系统与帮助",
+    tools: [
+      { id: "systools", label: "系统工具", desc: "启动项 / 服务 / Hosts", icon: Wrench, page: "systools" },
+      { id: "quicktools", label: "快捷工具", desc: "端口 / 系统入口 / 关机", icon: Sparkles, page: "quicktools" },
+      { id: "shellcmd", label: "快捷命令", desc: "SFC / DISM / 网络诊断", icon: Terminal, page: "shellcmd" },
+      { id: "structuredlog", label: "结构化日志", desc: "按等级检索运行日志", icon: ScrollText, page: "structuredlog" },
+      { id: "help", label: "帮助文档", desc: "使用说明与故障排查", icon: BookOpen, page: "help" },
+    ],
+  },
+];
 
 onMounted(refresh);
 </script>
@@ -201,18 +230,25 @@ onMounted(refresh);
           <p class="mb-2 flex items-center gap-1.5 text-xs font-semibold text-[var(--text-strong)]">
             <Sparkles class="h-3.5 w-3.5" /> 快速工具
           </p>
-          <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            <button
-              v-for="tool in QUICK_TOOLS"
-              :key="tool.id"
-              type="button"
-              class="flex flex-col items-start gap-1 rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3 text-left transition-all hover:-translate-y-0.5 hover:border-[var(--primary)]"
-              @click="route.go(tool.page as never)"
-            >
-              <component :is="tool.icon" class="h-4 w-4 text-[var(--primary)]" />
-              <span class="text-sm font-medium">{{ tool.label }}</span>
-              <span class="text-[10px] text-[var(--muted)]">{{ tool.desc }}</span>
-            </button>
+          <div class="space-y-3">
+            <div v-for="group in QUICK_GROUPS" :key="group.title">
+              <p class="mb-1.5 text-[11px] font-medium text-[var(--muted)]">{{ group.title }}</p>
+              <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
+                <button
+                  v-for="tool in group.tools"
+                  :key="tool.id"
+                  type="button"
+                  class="flex min-w-0 flex-col items-start gap-1 rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3 text-left transition-all hover:-translate-y-0.5 hover:border-[var(--primary)]"
+                  @click="route.go(tool.page)"
+                >
+                  <span class="nav-ico mb-0.5" style="color: var(--primary); background: var(--primary-soft)">
+                    <component :is="tool.icon" class="h-3.5 w-3.5" />
+                  </span>
+                  <span class="w-full truncate text-sm font-medium" :title="tool.label">{{ tool.label }}</span>
+                  <span class="w-full truncate text-[10px] text-[var(--muted)]" :title="tool.desc">{{ tool.desc }}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

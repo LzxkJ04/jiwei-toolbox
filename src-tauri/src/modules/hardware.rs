@@ -1079,6 +1079,60 @@ fn jopt(v: Option<&serde_json::Value>, key: &str) -> Option<f64> {
     v.and_then(|x| x.get(key)).and_then(|x| x.as_f64())
 }
 
+/// 可选非负整数。缺失、null、负数都视为没有读到。
+fn jopt_u64(v: Option<&serde_json::Value>, key: &str) -> Option<u64> {
+    let x = v?.get(key)?;
+    match x {
+        serde_json::Value::Number(n) => {
+            if let Some(u) = n.as_u64() {
+                Some(u)
+            } else {
+                let f = n.as_f64()?;
+                if f.is_finite() && f >= 0.0 {
+                    Some(f as u64)
+                } else {
+                    None
+                }
+            }
+        }
+        serde_json::Value::String(s) => {
+            let s = s.trim();
+            if s.is_empty() {
+                return None;
+            }
+            if let Ok(u) = s.parse::<u64>() {
+                return Some(u);
+            }
+            let f = s.parse::<f64>().ok()?;
+            if f.is_finite() && f >= 0.0 {
+                Some(f as u64)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Get-StorageReliabilityCounter 里 SMART 表还没输出的几项。
+/// Windows 这个计数器没有可靠的写入字节字段，这里不编造 TBW。
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ReliabilityExtra {
+    temp_max_c: Option<f64>,
+    read_errors: Option<u64>,
+    write_errors: Option<u64>,
+    start_stop: Option<u64>,
+}
+
+fn parse_reliability_extra(v: Option<&serde_json::Value>) -> ReliabilityExtra {
+    ReliabilityExtra {
+        temp_max_c: jopt(v, "TemperatureMax"),
+        read_errors: jopt_u64(v, "ReadErrorsUncorrected"),
+        write_errors: jopt_u64(v, "WriteErrorsUncorrected"),
+        start_stop: jopt_u64(v, "StartStopCycleCount"),
+    }
+}
+
 /// 磁盘 SMART 健康：Get-PhysicalDisk + Get-StorageReliabilityCounter 按 DeviceId 对齐；
 /// 部分盘无可靠性数据（需管理员/不支持）时相应字段为 null
 #[tauri::command]
@@ -1090,7 +1144,7 @@ pub async fn disk_smart() -> Result<Vec<serde_json::Value>, String> {
         return Err("无法读取磁盘信息（需要管理员权限或硬盘不支持）".into());
     }
     let rel = as_array(ps_json(
-        r#"@(Get-PhysicalDisk | Get-StorageReliabilityCounter | Select-Object DeviceId,Temperature,PowerOnHours,Wear) | ConvertTo-Json -Compress"#,
+        r#"@(Get-PhysicalDisk | Get-StorageReliabilityCounter | Select-Object DeviceId,Temperature,PowerOnHours,Wear,TemperatureMax,ReadErrorsUncorrected,WriteErrorsUncorrected,StartStopCycleCount) | ConvertTo-Json -Compress"#,
     ));
 
     let out: Vec<serde_json::Value> = disks
@@ -1098,6 +1152,7 @@ pub async fn disk_smart() -> Result<Vec<serde_json::Value>, String> {
         .map(|d| {
             let dev = jstr(d, "DeviceId", "");
             let r = rel.iter().find(|x| jstr(x, "DeviceId", "") == dev);
+            let extra = parse_reliability_extra(r);
             json!({
                 "model": jstr(d, "FriendlyName", "未知"),
                 "serial": jstr(d, "SerialNumber", ""),
@@ -1108,6 +1163,10 @@ pub async fn disk_smart() -> Result<Vec<serde_json::Value>, String> {
                 "temperature_c": jopt(r, "Temperature"),
                 "power_on_hours": jopt(r, "PowerOnHours").map(|v| v as u64),
                 "wear_pct": jopt(r, "Wear"),
+                "temp_max_c": extra.temp_max_c,
+                "read_errors": extra.read_errors,
+                "write_errors": extra.write_errors,
+                "start_stop": extra.start_stop,
             })
         })
         .collect();
@@ -1163,6 +1222,40 @@ fn read_cpu_temp_sync() -> Option<f64> {
 #[tauri::command]
 pub async fn cpu_temp() -> Option<f64> {
     read_cpu_temp_sync()
+}
+
+/// 传感器当前温度是否可展示。0℃ 与 150℃ 及以外（含 NaN）一律丢掉。
+fn sensor_temp_ok(temp: f64) -> bool {
+    temp.is_finite() && temp > 0.0 && temp < 150.0
+}
+
+/// 一条传感器。温度不合法则不进入列表；max 读不到或非有限值时为 null。
+fn sensor_json(label: &str, temperature: f64, max: Option<f64>) -> Option<serde_json::Value> {
+    if !sensor_temp_ok(temperature) {
+        return None;
+    }
+    let max = max.filter(|m| m.is_finite()).map(round1);
+    Some(json!({
+        "label": label,
+        "temperature": round1(temperature),
+        "max": max,
+    }))
+}
+
+/// 本机温度传感器。sysinfo 在 Windows 上经常是空列表，这不是错误。
+#[tauri::command]
+pub async fn list_sensors() -> Result<Vec<serde_json::Value>, String> {
+    let comps = sysinfo::Components::new_with_refreshed_list();
+    let out = comps
+        .list()
+        .iter()
+        .filter_map(|c| {
+            let temp = c.temperature()? as f64;
+            let max = c.max().map(|t| t as f64);
+            sensor_json(c.label(), temp, max)
+        })
+        .collect();
+    Ok(out)
 }
 
 /// GPU 温度：nvidia-smi（PATH → System32 → NVSMI 安装目录），不可用返回 null
@@ -1274,7 +1367,8 @@ mod tests {
     use super::{
         cpu_arch_name, cpu_from_snapshot, cpu_vendor_name, disks_from_snapshot, form_factor_name,
         gpus_from_snapshot, is_virtual_gpu, map_storage_enum, mem_type_name, memory_from_snapshot,
-        parse_wmi_date, pick_vram_mb, resolve_max_temp, vram_mb, DiskSpeed,
+        parse_reliability_extra, parse_wmi_date, pick_vram_mb, resolve_max_temp, round1,
+        sensor_json, sensor_temp_ok, vram_mb, DiskSpeed, ReliabilityExtra,
     };
     use serde_json::json;
 
@@ -1449,5 +1543,78 @@ mod tests {
         assert_eq!(resolve_max_temp(-10.0), 95.0);
         assert_eq!(resolve_max_temp(30.0), 95.0);
         assert_eq!(resolve_max_temp(150.0), 95.0);
+    }
+
+    #[test]
+    fn reliability_extra_reads_error_counts() {
+        let raw = json!({
+            "Temperature": 42,
+            "TemperatureMax": 67,
+            "PowerOnHours": 1200,
+            "Wear": 3,
+            "ReadErrorsUncorrected": 2,
+            "WriteErrorsUncorrected": 0,
+            "StartStopCycleCount": 88
+        });
+        let extra = parse_reliability_extra(Some(&raw));
+        assert_eq!(extra.temp_max_c, Some(67.0));
+        assert_eq!(extra.read_errors, Some(2));
+        assert_eq!(extra.write_errors, Some(0));
+        assert_eq!(extra.start_stop, Some(88));
+    }
+
+    #[test]
+    fn reliability_extra_missing_fields_are_none() {
+        let none = ReliabilityExtra {
+            temp_max_c: None,
+            read_errors: None,
+            write_errors: None,
+            start_stop: None,
+        };
+        assert_eq!(parse_reliability_extra(None), none);
+        assert_eq!(
+            parse_reliability_extra(Some(&json!({ "Wear": 5, "Temperature": 40 }))),
+            none
+        );
+        assert_eq!(
+            parse_reliability_extra(Some(&json!({
+                "TemperatureMax": null,
+                "ReadErrorsUncorrected": null,
+                "WriteErrorsUncorrected": null,
+                "StartStopCycleCount": null
+            }))),
+            none
+        );
+    }
+
+    #[test]
+    fn sensor_filter_drops_abnormal_temperature() {
+        assert!(sensor_temp_ok(0.1));
+        assert!(sensor_temp_ok(149.9));
+        assert!(!sensor_temp_ok(0.0));
+        assert!(!sensor_temp_ok(150.0));
+        assert!(!sensor_temp_ok(-5.0));
+        assert!(!sensor_temp_ok(160.0));
+        assert!(!sensor_temp_ok(f64::NAN));
+
+        let rows = [
+            ("CPU Package", 42.16, Some(80.04)),
+            ("zero", 0.0, None),
+            ("neg", -3.0, Some(10.0)),
+            ("limit", 150.0, Some(160.0)),
+            ("hot", 151.0, None),
+        ];
+        let kept: Vec<_> = rows
+            .iter()
+            .filter_map(|(label, temp, max)| sensor_json(label, *temp, *max))
+            .collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0]["label"], "CPU Package");
+        assert_eq!(kept[0]["temperature"], round1(42.16));
+        assert_eq!(kept[0]["max"], round1(80.04));
+
+        let no_max = sensor_json("Board", 31.0, None).unwrap();
+        assert_eq!(no_max["temperature"], 31.0);
+        assert!(no_max["max"].is_null());
     }
 }

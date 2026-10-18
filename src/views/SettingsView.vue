@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { Download, FolderOpen, Globe, Loader2, RefreshCw, Upload } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
@@ -120,6 +121,93 @@ function openDownloadUrl() {
   if (url) window.open(url, "_blank", "noopener");
 }
 
+/* ---- 软件更新设置（独立于上方「关于」卡片的即点即查） ---- */
+interface UpdateProbe {
+  current: string;
+  latest: string;
+  /** 后端实际返回 has_update（snake_case）；兼容 camelCase 版本 */
+  has_update?: boolean;
+  hasUpdate?: boolean;
+  url?: string;
+  notes?: string;
+}
+
+const updAuto = ref(true);
+const updPre = ref(false);
+const updKeep = ref(true);
+const updChecking = ref(false);
+const updResult = ref("");
+
+async function loadUpdatePrefs() {
+  const [auto, pre, keep] = await Promise.all([
+    invoke<string>("get_setting", { key: "auto_check_update" }).catch(() => ""),
+    invoke<string>("get_setting", { key: "update_prerelease" }).catch(() => ""),
+    invoke<string>("get_setting", { key: "update_keep_installer" }).catch(() => ""),
+  ]);
+  // 空串表示从未设置过：沿用界面默认值
+  if (auto === "1" || auto === "0") updAuto.value = auto === "1";
+  if (pre === "1" || pre === "0") updPre.value = pre === "1";
+  if (keep === "1" || keep === "0") updKeep.value = keep === "1";
+}
+
+async function saveUpdatePref(key: string, value: string, on: boolean, label: string): Promise<boolean> {
+  try {
+    await invoke("set_setting", { key, value });
+    toast(`${label}已${on ? "开启" : "关闭"}`, "success");
+    return true;
+  } catch (err) {
+    toast(`保存失败：${String(err)}`, "error");
+    return false;
+  }
+}
+
+async function toggleUpdAuto(v: boolean) {
+  updAuto.value = v;
+  if (!(await saveUpdatePref("auto_check_update", v ? "1" : "0", v, "启动时自动检测更新"))) {
+    updAuto.value = !v;
+  }
+}
+
+async function toggleUpdPre(v: boolean) {
+  updPre.value = v;
+  if (!(await saveUpdatePref("update_prerelease", v ? "1" : "0", v, "预发布版本检测"))) {
+    updPre.value = !v;
+  }
+}
+
+async function toggleUpdKeep(v: boolean) {
+  updKeep.value = v;
+  if (!(await saveUpdatePref("update_keep_installer", v ? "1" : "0", v, "保留安装包"))) {
+    updKeep.value = !v;
+  }
+}
+
+/** 结果文字：当前版本 · 最新版本 · 结论 */
+async function doCheckUpdateInline() {
+  if (updChecking.value) return;
+  updChecking.value = true;
+  updResult.value = "";
+  try {
+    const r = await invoke<UpdateProbe>("check_update");
+    if (!r) {
+      updResult.value = "检查失败：没有拿到版本信息";
+      return;
+    }
+    const cur = (r.current || "未知").replace(/^v/i, "");
+    const latest = (r.latest || cur).replace(/^v/i, "");
+    const has = r.has_update ?? r.hasUpdate ?? false;
+    const tail = has ? "有新版本" : "已是最新版";
+    const notes = (r.notes ?? "").trim();
+    updResult.value = `当前 v${cur} · 最新 v${latest} · ${tail}${notes ? ` · ${notes}` : ""}`;
+    toast(has ? `发现新版本 v${latest}` : "已是最新版", has ? "success" : "info");
+  } catch (err) {
+    updResult.value = `检查失败：${String(err)}`;
+    toast("检查更新失败", "error");
+  } finally {
+    updChecking.value = false;
+  }
+}
+
 async function doRelaunchRepair() {
   repairing.value = true;
   try {
@@ -218,6 +306,9 @@ onMounted(async () => {
   if (pp) proxyPort.value = pp;
   const bt = await getSetting("burn_max_temp_c");
   if (bt) burnMaxTemp.value = bt;
+
+  // 软件更新设置三个开关
+  void loadUpdatePrefs();
 });
 
 async function toggleAutostart(v: boolean) {
@@ -659,6 +750,58 @@ async function doReset() {  theme.setMode("dark");
           校验程序文件、重建目录配置、修复快捷方式与文件关联，不影响用户数据
         </p>
         <Button variant="gray" :disabled="repairing" @click="confirmRepair = true">修复安装</Button>
+      </Card>
+
+      <!-- ===== 软件更新设置 ===== -->
+      <Card class="p-5 lg:col-span-2">
+        <div class="mb-3 flex flex-wrap items-center gap-2">
+          <RefreshCw class="h-4 w-4 shrink-0 text-[var(--primary)]" />
+          <div class="min-w-0">
+            <h4 class="font-semibold">软件更新设置</h4>
+            <p class="text-xs text-[var(--muted)]">控制启动时的更新检测行为，以及更新成功后安装包的处理方式</p>
+          </div>
+        </div>
+
+        <div class="space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-sm font-medium">软件启动时自动检测更新</p>
+              <p class="mt-0.5 text-xs text-[var(--muted)]">启动后静默查询一次版本信息，有新版本时提示</p>
+            </div>
+            <Switch :checked="updAuto" @update:checked="toggleUpdAuto" />
+          </div>
+
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-sm font-medium">预发布版本检测</p>
+              <p class="mt-0.5 text-xs text-[var(--muted)]">包含 beta / preview 等尚未正式发布的版本，可能不够稳定</p>
+            </div>
+            <Switch :checked="updPre" @update:checked="toggleUpdPre" />
+          </div>
+
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-sm font-medium">更新成功后保留安装包</p>
+              <p class="mt-0.5 text-xs text-[var(--muted)]">保留更新包便于回滚或批量分发，会额外占用磁盘空间</p>
+            </div>
+            <Switch :checked="updKeep" @update:checked="toggleUpdKeep" />
+          </div>
+        </div>
+
+        <div class="mt-3 flex flex-wrap items-center gap-3 border-t border-[var(--card-border)] pt-3">
+          <Button variant="gray" size="sm" :disabled="updChecking" @click="doCheckUpdateInline">
+            <Loader2 v-if="updChecking" class="h-3.5 w-3.5 animate-spin" />
+            <RefreshCw v-else class="h-3.5 w-3.5" />
+            {{ updChecking ? "检查中…" : "立即检查更新" }}
+          </Button>
+          <p
+            v-if="updResult"
+            class="min-w-0 flex-1 break-all text-xs leading-relaxed text-[var(--text)]"
+          >
+            {{ updResult }}
+          </p>
+          <p v-else class="text-xs text-[var(--muted)]">点「立即检查更新」查询远程最新版本</p>
+        </div>
       </Card>
 
       <!-- ===== 关于 ===== -->

@@ -273,7 +273,7 @@ pub fn list_software() -> Vec<Software> {
 }
 
 /// 内置远程清单源（可经 settings.json 的 software_source_url 覆盖）
-const DEFAULT_SOFTWARE_SOURCE: &str = "https://raw.githubusercontent.com/jiwei-toolbox/softwares/main/softwares.json";
+pub const DEFAULT_SOFTWARE_SOURCE: &str = "https://raw.githubusercontent.com/jiwei-toolbox/softwares/main/softwares.json";
 
 /// 远程清单更新结果
 #[derive(Serialize)]

@@ -31,9 +31,9 @@ const emit = defineEmits<{ (e: "update:open", v: boolean): void }>();
           v-if="props.title !== undefined"
           class="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-[var(--card-border)] bg-[var(--card-solid)]/90 px-5 py-3.5 backdrop-blur"
         >
-          <DialogTitle class="font-semibold">{{ props.title }}</DialogTitle>
+          <DialogTitle class="min-w-0 flex-1 truncate font-semibold">{{ props.title }}</DialogTitle>
           <DialogClose
-            class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-[var(--muted)] transition-colors hover:bg-[var(--btn-gray)] hover:text-[var(--text)]"
+            class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-[var(--muted)] transition-colors hover:bg-[var(--btn-gray)] hover:text-[var(--text)]"
           >
             <X class="h-4 w-4" />
           </DialogClose>

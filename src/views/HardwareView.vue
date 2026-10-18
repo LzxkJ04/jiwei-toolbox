@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import {
   CircuitBoard, Copy, Cpu, Eye, EyeOff, Flame, Grid3x3, HardDrive, Loader2, MemoryStick, Monitor,
@@ -410,9 +411,51 @@ function tempText(t: number | null) {
   return t === null ? "—" : `${t}℃`;
 }
 
+/* ============ 温度传感器 ============ */
+
+interface HwSensor {
+  label: string;
+  temperature: number;
+  max?: number | null;
+}
+
+const sensors = ref<HwSensor[]>([]);
+const sensorsLoading = ref(false);
+const sensorsRead = ref(false);
+const sensorsError = ref("");
+
+function sensorTempText(t: number | null | undefined) {
+  if (t == null || !Number.isFinite(t)) return "—";
+  return `${t}℃`;
+}
+
+async function readSensors() {
+  if (sensorsLoading.value) return;
+  sensorsLoading.value = true;
+  sensorsError.value = "";
+  try {
+    const list = await invoke<HwSensor[]>("list_sensors");
+    sensors.value = Array.isArray(list) ? list : [];
+  } catch {
+    sensors.value = [];
+    sensorsError.value = "读取失败，请稍后重试";
+  } finally {
+    sensorsLoading.value = false;
+    sensorsRead.value = true;
+  }
+}
+
 /* ============ SMART ============ */
 
-const smartDisks = ref<DiskSmartInfo[]>([]);
+/** disk_smart 新增字段。类型声明在视图内，避免改 tauri.ts。 */
+interface DiskSmartRow extends DiskSmartInfo {
+  temp_max_c?: number | null;
+  read_errors?: number | null;
+  write_errors?: number | null;
+  start_stop?: number | null;
+}
+
+const smartDisks = ref<DiskSmartRow[]>([]);
 const smartFailed = ref(false);
 const smartLoading = ref(false);
 const smartRead = ref(false);
@@ -423,7 +466,7 @@ async function readSmart() {
   smartLoading.value = false;
   smartRead.value = true;
   smartFailed.value = res === null;
-  smartDisks.value = res ?? [];
+  smartDisks.value = (res ?? []) as DiskSmartRow[];
 }
 
 function healthMeta(s?: string): { label: string; cls: string } {
@@ -586,6 +629,41 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <Card class="p-5">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div class="flex min-w-0 flex-wrap items-center gap-2">
+              <Flame class="h-4 w-4 shrink-0 text-[var(--primary)]" />
+              <h4 class="font-semibold">温度传感器</h4>
+            </div>
+            <Button variant="gray" size="sm" :disabled="sensorsLoading" @click="readSensors">
+              <RefreshCw class="h-3.5 w-3.5" :class="sensorsLoading && 'animate-spin'" />
+              读取传感器
+            </Button>
+          </div>
+          <Spinner v-if="sensorsLoading" label="正在读取温度传感器…" />
+          <p v-else-if="sensorsError" class="text-sm text-[var(--muted)]">{{ sensorsError }}</p>
+          <p v-else-if="!sensorsRead" class="text-sm text-[var(--muted)]">读取本机暴露给系统的温度传感器。</p>
+          <EmptyState
+            v-else-if="sensors.length === 0"
+            icon="🌡️"
+            text="未读到温度传感器"
+            sub="本机可能未暴露传感器，这不是故障。不少主板和笔记本不会向系统提供这项数据。"
+          />
+          <div v-else class="space-y-2">
+            <div
+              v-for="(s, i) in sensors"
+              :key="`${s.label}-${i}`"
+              class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] px-3 py-2"
+            >
+              <span class="min-w-0 flex-1 truncate text-sm font-medium text-[var(--text-strong)]" :title="s.label || '未命名传感器'">
+                {{ s.label || "未命名传感器" }}
+              </span>
+              <span class="shrink-0 text-sm font-semibold tabular-nums text-[var(--text-strong)]">{{ sensorTempText(s.temperature) }}</span>
+              <span v-if="s.max != null" class="shrink-0 text-xs tabular-nums text-[var(--muted)]">最高 {{ sensorTempText(s.max) }}</span>
+            </div>
+          </div>
+        </Card>
+
         <p v-if="osLine" class="truncate text-xs text-[var(--muted)]" :title="osLine">{{ osLine }}</p>
 
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -733,10 +811,10 @@ onUnmounted(() => {
           </div>
           <Spinner v-if="smartLoading" label="正在读取磁盘 SMART 信息…" />
           <p v-else-if="smartFailed" class="text-sm text-[var(--muted)]">读取失败：需要管理员权限，或硬盘不支持 SMART</p>
-          <p v-else-if="!smartRead" class="text-sm text-[var(--muted)]">读取健康状态、温度、通电时间和磨损</p>
+          <p v-else-if="!smartRead" class="text-sm text-[var(--muted)]">读取健康状态、温度、通电时间、磨损、最高温、读写错误和启停次数</p>
           <p v-else-if="smartDisks.length === 0" class="text-sm text-[var(--muted)]">未发现磁盘</p>
           <div v-else class="overflow-x-auto rounded-xl border border-[var(--card-border)]">
-            <table class="w-full min-w-[720px] text-left text-xs">
+            <table class="w-full min-w-[1080px] text-left text-xs">
               <thead>
                 <tr class="border-b border-[var(--card-border)] bg-[var(--card-soft)] text-[var(--muted)]">
                   <th class="px-3 py-2.5 font-medium">型号</th>
@@ -745,20 +823,28 @@ onUnmounted(() => {
                   <th class="px-3 py-2.5 font-medium">介质</th>
                   <th class="px-3 py-2.5 font-medium">健康</th>
                   <th class="px-3 py-2.5 text-right font-medium">温度</th>
+                  <th class="px-3 py-2.5 text-right font-medium">最高温</th>
                   <th class="px-3 py-2.5 text-right font-medium">通电</th>
-                  <th class="px-3 py-2.5 text-right font-medium">损耗</th>
+                  <th class="px-3 py-2.5 text-right font-medium">磨损</th>
+                  <th class="px-3 py-2.5 text-right font-medium">读错误</th>
+                  <th class="px-3 py-2.5 text-right font-medium">写错误</th>
+                  <th class="px-3 py-2.5 text-right font-medium">启停次数</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-[var(--card-border)]">
                 <tr v-for="(d, i) in smartDisks" :key="`${d.serial}-${i}`">
                   <td class="max-w-[180px] truncate px-3 py-2.5 font-medium" :title="d.model">{{ d.model || "—" }}</td>
-                  <td class="px-3 py-2.5 font-mono">{{ d.serial || "—" }}</td>
+                  <td class="max-w-[140px] truncate px-3 py-2.5 font-mono" :title="d.serial || ''">{{ d.serial || "—" }}</td>
                   <td class="px-3 py-2.5">{{ d.bus_type || "—" }}</td>
                   <td class="px-3 py-2.5">{{ d.media || "—" }}</td>
                   <td class="px-3 py-2.5 font-semibold" :class="healthMeta(smartHealthText(d)).cls">{{ healthMeta(smartHealthText(d)).label }}</td>
                   <td class="px-3 py-2.5 text-right tabular-nums" :class="diskTempClass(d.temperature_c)">{{ d.temperature_c == null ? "—" : d.temperature_c }}</td>
+                  <td class="px-3 py-2.5 text-right tabular-nums" :class="diskTempClass(d.temp_max_c)">{{ dash(d.temp_max_c) }}</td>
                   <td class="px-3 py-2.5 text-right tabular-nums">{{ d.power_on_hours == null ? "—" : `${d.power_on_hours} h` }}</td>
                   <td class="px-3 py-2.5 text-right tabular-nums">{{ d.wear_pct == null ? "—" : `${d.wear_pct}%` }}</td>
+                  <td class="px-3 py-2.5 text-right tabular-nums">{{ dash(d.read_errors) }}</td>
+                  <td class="px-3 py-2.5 text-right tabular-nums">{{ dash(d.write_errors) }}</td>
+                  <td class="px-3 py-2.5 text-right tabular-nums">{{ dash(d.start_stop) }}</td>
                 </tr>
               </tbody>
             </table>

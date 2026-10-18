@@ -2,6 +2,7 @@
 import { onUnmounted, onMounted, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Copy, Minus, Pin, PinOff, Square, X } from "lucide-vue-next";
+import AppMark from "./AppMark.vue";
 
 const appWindow = getCurrentWindow();
 const maximized = ref(false);
@@ -39,11 +40,7 @@ async function togglePin() {
   >
     <!-- 左：logo + 应用名 -->
     <div data-tauri-drag-region class="flex items-center gap-2">
-      <div
-        class="flex h-6 w-6 items-center justify-center rounded-md bg-gradient-to-b from-[var(--primary-hov)] to-[var(--primary)] text-xs font-bold text-white shadow-[0_0_10px_var(--primary-glow)]"
-      >
-        极
-      </div>
+      <AppMark :size="22" class="rounded-md shadow-[0_0_10px_var(--primary-glow)]" />
       <span data-tauri-drag-region class="text-sm font-semibold tracking-wide">极维工具箱</span>
     </div>
 

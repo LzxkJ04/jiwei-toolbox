@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import AppMark from "../components/AppMark.vue";
 import Button from "../components/ui/Button.vue";
 import ConfirmDialog from "../components/ui/ConfirmDialog.vue";
 import { relaunchPortable } from "../lib/tauri";
@@ -21,6 +22,8 @@ import {
 } from "../lib/tauri";
 
 type Step = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+/** 构建期注入的版本号（来源 package.json） */
+const appVersion = __APP_VERSION__;
 const step = ref<Step>(0);
 const stepNames = ["欢迎安装", "许可协议", "安装位置", "附加组件", "依赖预检", "正在安装", "安装完成"];
 
@@ -249,8 +252,7 @@ function canNext() {
         style="background: radial-gradient(circle, rgba(255,255,255,.14), transparent 65%)" />
       <div class="absolute -bottom-14 -right-14 h-48 w-48 rounded-full"
         style="background: radial-gradient(circle, rgba(96,165,250,.25), transparent 60%)" />
-      <div class="z-10 flex h-[76px] w-[76px] items-center justify-center rounded-3xl bg-white text-4xl font-bold shadow-xl"
-        style="color: var(--primary)">极</div>
+      <AppMark :size="76" class="z-10 rounded-3xl shadow-xl" />
       <h1 class="z-10 mt-3 text-lg font-semibold tracking-wide">极维工具箱</h1>
       <p class="z-10 mt-1 text-[11px] text-white/60">一站式 Windows 系统运维工具箱</p>
       <div class="z-10 mt-9 w-full">
@@ -273,7 +275,7 @@ function canNext() {
           </span>
         </div>
       </div>
-      <div class="z-10 mt-auto text-[10px] text-white/50">v0.1.0 · for Windows</div>
+      <div class="z-10 mt-auto text-[10px] text-white/50">v{{ appVersion }} · for Windows</div>
     </aside>
 
     <!-- 右侧内容 -->

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // 清单备份：后端持久化（data\备份导出\*.jwinv.json）；导出/导入 JSON 文件用于跨电脑迁移。
 import { computed, onMounted, ref } from "vue";
-import { Download, FileUp, GitCompare, ListRestart, Pencil, RefreshCw, Save, Trash2 } from "lucide-vue-next";
+import { invoke } from "@tauri-apps/api/core";
+import { Archive, Download, FileUp, GitCompare, ListRestart, Pencil, RefreshCw, RotateCcw, Save, ShieldCheck, Trash2 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
 import Button from "../components/ui/Button.vue";
@@ -13,6 +14,7 @@ import Checkbox from "../components/ui/Checkbox.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import Dialog from "../components/ui/Dialog.vue";
 import ConfirmDialog from "../components/ui/ConfirmDialog.vue";
+import Select from "../components/ui/Select.vue";
 import {
   getAutoBackupInventory,
   listInstalled,
@@ -22,6 +24,9 @@ import {
   loadInventoryDoc,
   deleteInventory,
   renameInventory,
+  createBackup,
+  listBackups,
+  type BackupItem,
   type InventoryAppRef,
   type InventoryMeta,
 } from "../lib/tauri";
@@ -288,9 +293,160 @@ async function confirmDelete() {
 const autoBackup = ref(false);
 const autoBackupLoading = ref(true);
 
+/* ---- 配置打包（.jwbak）：清单功能保持原样，这一段是下面新增的卡片 ---- */
+interface ConfigProfile {
+  id: string;
+  name: string;
+  paths: string[];
+  exists: boolean;
+}
+
+interface VerifyResult {
+  ok: boolean;
+  checked: number;
+  mismatches: string[];
+}
+
+const strategyOptions = [
+  { value: "overwrite", label: "覆盖已有文件" },
+  { value: "skip", label: "跳过已有文件" },
+  { value: "rename", label: "重命名以免覆盖" },
+];
+
+const packNote = ref("");
+const packing = ref(false);
+const bakFiles = ref<BackupItem[]>([]);
+const bakLoading = ref(false);
+const strategy = ref("overwrite");
+const verifyingFile = ref("");
+const verifyText = ref("");
+const verifyOk = ref<boolean | null>(null);
+const showRestore = ref(false);
+const restoreTarget = ref<BackupItem | null>(null);
+const restoring = ref(false);
+
+const profiles = ref<ConfigProfile[]>([]);
+const profilesLoading = ref(false);
+const profileChecked = ref(new Set<string>());
+const profileNote = ref("");
+const profileBacking = ref(false);
+
+const strategyLabel = computed(() => strategyOptions.find((o) => o.value === strategy.value)?.label ?? "覆盖已有文件");
+
+function errText(e: unknown) {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
+function baseName(p: string) {
+  const parts = p.split(/[/\\]/);
+  return parts[parts.length - 1] || p;
+}
+
+async function refreshBakFiles() {
+  bakLoading.value = true;
+  const v = await listBackups();
+  bakFiles.value = v ?? [];
+  bakLoading.value = false;
+}
+
+async function packCurrentConfig() {
+  packing.value = true;
+  const res = await createBackup(packNote.value.trim());
+  packing.value = false;
+  if (res) {
+    toast("当前配置已打包", "success");
+    refreshBakFiles();
+  }
+}
+
+async function loadProfiles() {
+  profilesLoading.value = true;
+  try {
+    profiles.value = (await invoke<ConfigProfile[]>("list_config_profiles")) ?? [];
+  } catch (e) {
+    profiles.value = [];
+    toast(`读取配置档案失败：${errText(e)}`, "error");
+  } finally {
+    profilesLoading.value = false;
+  }
+}
+
+function setProfileChecked(id: string, v: boolean) {
+  const next = new Set(profileChecked.value);
+  if (v) next.add(id);
+  else next.delete(id);
+  profileChecked.value = next;
+}
+
+async function backupSelectedProfiles() {
+  const ids = [...profileChecked.value];
+  if (ids.length === 0) {
+    toast("请先勾选要备份的软件", "info");
+    return;
+  }
+  profileBacking.value = true;
+  try {
+    const res = await invoke<{ file: string }>("backup_profiles", { ids, note: profileNote.value.trim() });
+    toast(`已备份所选软件配置：${baseName(res?.file ?? "")}`, "success");
+    profileChecked.value = new Set();
+    refreshBakFiles();
+  } catch (e) {
+    toast(`备份失败：${errText(e)}`, "error");
+  } finally {
+    profileBacking.value = false;
+  }
+}
+
+async function verifyBak(b: BackupItem) {
+  verifyingFile.value = b.file;
+  verifyText.value = "";
+  verifyOk.value = null;
+  try {
+    const res = await invoke<VerifyResult>("verify_backup", { file: b.file });
+    verifyOk.value = !!res?.ok;
+    if (res?.ok) {
+      verifyText.value = `「${baseName(b.file)}」校验通过，已核对 ${res.checked} 个文件`;
+      toast(verifyText.value, "success");
+    } else {
+      const detail = (res?.mismatches ?? []).slice(0, 3).join("；") || "校验未通过";
+      verifyText.value = `「${baseName(b.file)}」校验未通过：${detail}`;
+      toast(verifyText.value, "error");
+    }
+  } catch (e) {
+    verifyOk.value = false;
+    verifyText.value = `校验失败：${errText(e)}`;
+    toast(verifyText.value, "error");
+  } finally {
+    verifyingFile.value = "";
+  }
+}
+
+function openRestoreBak(b: BackupItem) {
+  restoreTarget.value = b;
+  showRestore.value = true;
+}
+
+async function confirmRestoreBak() {
+  const b = restoreTarget.value;
+  if (!b) return;
+  restoring.value = true;
+  try {
+    await invoke("restore_backup", { file: b.file, strategy: strategy.value });
+    toast(`已按「${strategyLabel.value}」恢复配置`, "success");
+  } catch (e) {
+    toast(`恢复失败：${errText(e)}`, "error");
+  } finally {
+    restoring.value = false;
+  }
+}
+
 onMounted(async () => {
   void scanInstalled();
   refreshInventories();
+  void refreshBakFiles();
+  void loadProfiles();
   const v = await getAutoBackupInventory();
   if (v !== null) autoBackup.value = v;
   autoBackupLoading.value = false;
@@ -425,6 +581,104 @@ async function onAutoBackup(v: boolean) {
       <span v-else class="text-xs text-[var(--muted)]">读取中…</span>
     </Card>
 
+    <!-- 配置打包：位于软件清单备份下方，不改动上面的清单功能 -->
+    <Card class="mt-4 p-5">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0">
+          <h3 class="font-semibold">配置打包</h3>
+          <p class="mt-0.5 text-xs leading-relaxed text-[var(--muted)]">
+            把工具箱配置目录或常见软件的配置打成 .jwbak。恢复前会先核对清单里的 sha256，不一致则不会改动现有文件。软件配置会还原到工具箱配置目录下对应的子目录，不会写回 Chrome、微信等软件自己的原目录。
+          </p>
+        </div>
+      </div>
+
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <Input v-model="packNote" placeholder="当前配置的备注，可留空" class="min-w-[12rem] flex-1" />
+        <Button variant="primary" size="sm" :disabled="packing" @click="packCurrentConfig">
+          <Archive class="h-3.5 w-3.5" /> {{ packing ? "打包中…" : "打包当前配置" }}
+        </Button>
+        <Button variant="gray" size="sm" :disabled="bakLoading" @click="refreshBakFiles">
+          <RefreshCw class="h-3.5 w-3.5" /> {{ bakLoading ? "刷新中…" : "刷新备份列表" }}
+        </Button>
+      </div>
+
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <span class="text-xs text-[var(--muted)]">恢复策略</span>
+        <Select v-model="strategy" :options="strategyOptions" class="min-w-[10rem]" />
+        <span class="text-xs text-[var(--muted)]">当前：{{ strategyLabel }}</span>
+      </div>
+
+      <p
+        v-if="verifyText"
+        class="mt-2 truncate text-xs"
+        :class="verifyOk === false ? 'font-medium text-[var(--text)]' : 'text-[var(--muted)]'"
+        :title="verifyText"
+      >
+        {{ verifyText }}
+      </p>
+
+      <div v-if="bakFiles.length === 0" class="mt-3 text-sm text-[var(--muted)]">暂无 .jwbak 备份。打包后会出现在这里。</div>
+      <div v-else class="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+        <div
+          v-for="b in bakFiles"
+          :key="b.file"
+          class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3"
+        >
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="min-w-0 flex-1 truncate text-sm font-medium" :title="b.file">{{ baseName(b.file) }}</span>
+            <Badge tone="gray">{{ formatBytes(b.size) }}</Badge>
+            <span class="text-xs text-[var(--muted)]">{{ b.time }}</span>
+          </div>
+          <p class="mt-1 truncate text-xs text-[var(--muted)]" :title="b.file">{{ b.file }}</p>
+          <div class="mt-2 flex flex-wrap items-center gap-1.5">
+            <Button variant="gray" size="sm" :disabled="verifyingFile === b.file" @click="verifyBak(b)">
+              <ShieldCheck class="h-3.5 w-3.5" /> {{ verifyingFile === b.file ? "校验中…" : "校验" }}
+            </Button>
+            <Button variant="primary" size="sm" :disabled="restoring" @click="openRestoreBak(b)">
+              <RotateCcw class="h-3.5 w-3.5" /> 恢复
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4 border-t border-[var(--card-border)] pt-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="min-w-0">
+            <h4 class="text-sm font-semibold">软件配置档案</h4>
+            <p class="mt-0.5 text-xs text-[var(--muted)]">勾选已安装软件的配置目录，备份为 config-时间.jwbak。未找到的路径不会被打包。</p>
+          </div>
+          <Button variant="gray" size="sm" :disabled="profilesLoading" @click="loadProfiles">
+            <RefreshCw class="h-3.5 w-3.5" /> 刷新档案
+          </Button>
+        </div>
+
+        <div v-if="profilesLoading" class="mt-3 text-xs text-[var(--muted)]">正在读取配置档案…</div>
+        <div v-else-if="profiles.length === 0" class="mt-3 text-sm text-[var(--muted)]">没有读到配置档案。</div>
+        <div v-else class="mt-3 max-h-72 space-y-1 overflow-y-auto pr-1">
+          <label
+            v-for="p in profiles"
+            :key="p.id"
+            class="flex cursor-pointer flex-wrap items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--btn-gray)]"
+          >
+            <Checkbox :checked="profileChecked.has(p.id)" @update:checked="(v) => setProfileChecked(p.id, !!v)" />
+            <span class="truncate text-sm">{{ p.name }}</span>
+            <Badge :tone="p.exists ? 'primary' : 'gray'">{{ p.exists ? "已找到" : "未找到" }}</Badge>
+            <span class="min-w-0 w-full flex-1 truncate text-xs text-[var(--muted)] sm:w-auto" :title="p.paths.join(' | ')">
+              {{ p.paths.join("；") }}
+            </span>
+          </label>
+        </div>
+
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <Input v-model="profileNote" placeholder="软件配置备份的备注，可留空" class="min-w-[12rem] flex-1" />
+          <Button variant="primary" size="sm" :disabled="profileBacking || profileChecked.size === 0" @click="backupSelectedProfiles">
+            <Save class="h-3.5 w-3.5" /> {{ profileBacking ? "备份中…" : "备份所选软件配置" }}
+          </Button>
+          <span class="text-xs text-[var(--muted)]">已勾选 {{ profileChecked.size }} 个</span>
+        </div>
+      </div>
+    </Card>
+
     <!-- 生成备份清单：自定义名称 -->
     <Dialog :open="showCreate" title="生成备份清单" @update:open="showCreate = $event">
       <div class="space-y-3">
@@ -433,7 +687,7 @@ async function onAutoBackup(v: boolean) {
         </p>
         <div>
           <label class="mb-1.5 block text-xs text-[var(--muted)]">备份名称</label>
-          <Input v-model="createName" placeholder="例如：办公机常用软件" @keydown.enter="confirmCreate" />
+          <Input v-model="createName" placeholder="例如：办公机常用软件" />
         </div>
       </div>
       <template #footer>
@@ -446,7 +700,7 @@ async function onAutoBackup(v: boolean) {
 
     <!-- 重命名 -->
     <Dialog :open="showRename" title="重命名备份清单" @update:open="showRename = $event">
-      <Input v-model="renameName" placeholder="输入新名称" @keydown.enter="confirmRename" />
+      <Input v-model="renameName" placeholder="输入新名称" />
       <template #footer>
         <div class="flex justify-end gap-3">
           <Button variant="gray" @click="showRename = false">取消</Button>
@@ -531,6 +785,17 @@ async function onAutoBackup(v: boolean) {
       danger
       @update:open="showDelete = $event"
       @confirm="confirmDelete"
+    />
+
+    <!-- 恢复 .jwbak：沿用确认框，策略在卡片上选择 -->
+    <ConfirmDialog
+      :open="showRestore"
+      title="恢复配置备份"
+      :message="`即将把备份「${baseName(restoreTarget?.file ?? '')}」恢复到工具箱配置目录，策略为「${strategyLabel}」。若包内清单与文件哈希不一致，会直接拒绝，不会先删除已有文件。确定继续？`"
+      confirm-text="开始恢复"
+      :danger="strategy === 'overwrite'"
+      @update:open="showRestore = $event"
+      @confirm="confirmRestoreBak"
     />
   </div>
 </template>

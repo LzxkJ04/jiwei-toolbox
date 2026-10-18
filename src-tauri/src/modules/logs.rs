@@ -50,16 +50,120 @@ pub async fn list_logs() -> Vec<String> {
     out
 }
 
+/// 日志文件名穿越校验：非空，且不含 `\`、`/`、`..`（与 read_log 相同规则）
+pub(crate) fn validate_log_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains('\\') && !name.contains('/') && !name.contains("..")
+}
+
 /// 读取日志内容（仅允许 log 目录下的普通文件名，防目录穿越）
 #[tauri::command]
 pub async fn read_log(file: String) -> Result<String, String> {
-    if file.contains('\\') || file.contains('/') || file.contains("..") {
+    if !validate_log_name(&file) {
         return Err("非法日志文件名".into());
     }
     let dirs = crate::dirs::load_dirs();
     let path = std::path::Path::new(&dirs.log).join(&file);
     let bytes = std::fs::read(&path).map_err(|e| format!("{}: {}", file, e))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// 把日志文件打成 zip，写到「备份导出」目录（`dirs.backup`）。
+/// `names` 为空时打包日志目录下全部普通文件，最多 200 个。
+#[tauri::command]
+pub async fn export_logs_zip(names: Vec<String>) -> Result<serde_json::Value, String> {
+    let dirs = crate::dirs::load_dirs();
+    let log_dir = Path::new(&dirs.log);
+
+    let targets: Vec<String> = if names.is_empty() {
+        let mut all: Vec<String> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(log_dir) {
+            for e in entries.flatten() {
+                if !e.path().is_file() {
+                    continue;
+                }
+                let name = e.file_name().to_string_lossy().into_owned();
+                if validate_log_name(&name) {
+                    all.push(name);
+                }
+            }
+        }
+        all.sort();
+        all.reverse();
+        all.truncate(200);
+        all
+    } else {
+        let mut seen = std::collections::HashSet::<String>::new();
+        let mut picked = Vec::new();
+        for name in names {
+            if !validate_log_name(&name) {
+                return Err("非法日志文件名".into());
+            }
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let path = log_dir.join(&name);
+            if path.parent() != Some(log_dir) {
+                return Err("非法日志文件名".into());
+            }
+            if path.is_file() {
+                picked.push(name);
+            }
+        }
+        picked
+    };
+
+    if targets.is_empty() {
+        return Err("没有可导出的日志文件".into());
+    }
+
+    let backup_dir = Path::new(&dirs.backup);
+    std::fs::create_dir_all(backup_dir).map_err(|e| e.to_string())?;
+    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let dest = backup_dir.join(format!("logs-{}.zip", ts));
+
+    let packed = (|| -> Result<(usize, u64), String> {
+        let out = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+        let mut zw = zip::ZipWriter::new(out);
+        let mut count = 0usize;
+        for name in &targets {
+            let path = log_dir.join(name);
+            if path.parent() != Some(log_dir) || !path.is_file() {
+                continue;
+            }
+            zw.start_file(name, zip::write::SimpleFileOptions::default())
+                .map_err(|e| format!("{}: {}", name, e))?;
+            let mut src = std::fs::File::open(&path).map_err(|e| format!("{}: {}", name, e))?;
+            std::io::copy(&mut src, &mut zw).map_err(|e| format!("{}: {}", name, e))?;
+            count += 1;
+        }
+        if count == 0 {
+            return Err("没有可导出的日志文件".into());
+        }
+        let mut finished = zw.finish().map_err(|e| e.to_string())?;
+        finished.flush().map_err(|e| e.to_string())?;
+        let bytes = finished.metadata().map_err(|e| e.to_string())?.len();
+        Ok((count, bytes))
+    })();
+
+    let (count, bytes) = match packed {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = std::fs::remove_file(&dest);
+            return Err(e);
+        }
+    };
+
+    op_log(
+        &dirs,
+        "logs",
+        "export_logs_zip",
+        &format!("导出 {} 个日志到 {}（{} 字节）", count, dest.display(), bytes),
+    );
+    Ok(serde_json::json!({
+        "file": dest.to_string_lossy(),
+        "count": count,
+        "bytes": bytes,
+    }))
 }
 
 /// 清空日志目录（删除全部日志文件，保留目录本身），返回删除的文件数
@@ -186,6 +290,34 @@ mod tests {
         assert!(!log_expired(now - std::time::Duration::from_secs(6 * 86400), now, 7));
         // 刚创建的文件不过期
         assert!(!log_expired(now, now, 7));
+    }
+
+    #[test]
+    fn validate_log_name_accepts_plain_filename() {
+        assert!(validate_log_name("ops-20261018.log"));
+        assert!(validate_log_name("app.log"));
+        assert!(validate_log_name("错误日志.txt"));
+    }
+
+    #[test]
+    fn validate_log_name_rejects_slash() {
+        assert!(!validate_log_name("a/b.log"));
+        assert!(!validate_log_name("a\\b.log"));
+        assert!(!validate_log_name("/etc/passwd"));
+        assert!(!validate_log_name("..\\secret.log"));
+    }
+
+    #[test]
+    fn validate_log_name_rejects_dotdot() {
+        assert!(!validate_log_name(".."));
+        assert!(!validate_log_name("../secret.log"));
+        assert!(!validate_log_name("foo/../bar.log"));
+        assert!(!validate_log_name("foo..bar.log"));
+    }
+
+    #[test]
+    fn validate_log_name_rejects_empty() {
+        assert!(!validate_log_name(""));
     }
 
     #[test]

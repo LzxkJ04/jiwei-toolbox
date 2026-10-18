@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Check, Download, Loader2, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Trash2,
 } from "lucide-vue-next";
@@ -72,6 +73,7 @@ const disabledStartup = ref<DisabledStartup[]>([]);
 
 async function loadStartup() {
   startupLoading.value = true;
+  const tasksPromise = loadLogonTasks();
   const [res, disabled] = await Promise.all([listStartup(), listDisabledStartup()]);
   startupLoading.value = false;
   if (res) {
@@ -84,6 +86,7 @@ async function loadStartup() {
     loaded.value.startup = true;
   }
   disabledStartup.value = disabled ?? [];
+  await tasksPromise;
 }
 
 async function onToggleStartup(item: StartupItem, enable: boolean) {
@@ -131,6 +134,71 @@ function fmtDate(ts: number) {
   const d = new Date(ts * 1000);
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+interface LogonTask {
+  taskName: string;
+  taskPath: string;
+  state: string;
+  author: string;
+}
+
+const logonTasks = ref<LogonTask[] | null>(null);
+const logonLoading = ref(false);
+const logonError = ref("");
+const logonBusy = ref("");
+const logonConfirm = ref<{ task: LogonTask; enable: boolean } | null>(null);
+
+function invokeError(e: unknown, fallback: string) {
+  if (typeof e === "string" && e.trim()) return e;
+  if (e && typeof e === "object" && "message" in e) {
+    const msg = (e as { message?: unknown }).message;
+    if (typeof msg === "string" && msg.trim()) return msg;
+  }
+  const text = e == null ? "" : String(e);
+  return text && text !== "[object Object]" ? text : fallback;
+}
+
+function logonKey(task: LogonTask) {
+  return `${task.taskPath}|${task.taskName}`;
+}
+
+async function loadLogonTasks() {
+  logonLoading.value = true;
+  logonError.value = "";
+  try {
+    const res = await invoke<LogonTask[]>("list_logon_tasks");
+    logonTasks.value = Array.isArray(res) ? res : [];
+  } catch (e) {
+    logonTasks.value = null;
+    logonError.value = invokeError(e, "读取登录计划任务失败");
+  } finally {
+    logonLoading.value = false;
+  }
+}
+
+function askToggleLogon(task: LogonTask, enable: boolean) {
+  logonConfirm.value = { task, enable };
+}
+
+async function doToggleLogon() {
+  const pending = logonConfirm.value;
+  if (!pending) return;
+  const { task, enable } = pending;
+  logonBusy.value = logonKey(task);
+  try {
+    await invoke("set_logon_task", {
+      taskPath: task.taskPath,
+      taskName: task.taskName,
+      enabled: enable,
+    });
+    toast(`已${enable ? "启用" : "禁用"}「${task.taskName}」`, "success");
+    await loadLogonTasks();
+  } catch (e) {
+    toast(invokeError(e, `${enable ? "启用" : "禁用"}登录计划任务失败`), "error");
+  } finally {
+    logonBusy.value = "";
+  }
 }
 
 /* ============ 2. 服务 ============ */
@@ -430,6 +498,7 @@ async function loadEnv() {
     envVars.value = res;
     loaded.value.env = true;
   }
+  await loadPathEntries();
 }
 
 function switchEnvScope(s: "user" | "system") {
@@ -502,6 +571,88 @@ async function doEnvAdd() {
     envAddValue.value = "";
     toast("变量已新增", "success");
     await loadEnv();
+  }
+}
+
+interface PathEntry {
+  index: number;
+  value: string;
+  exists: boolean;
+  pending?: boolean;
+}
+
+const pathEntries = ref<PathEntry[]>([]);
+const pathLoading = ref(false);
+const pathError = ref("");
+const pathNew = ref("");
+const pathSaving = ref(false);
+const pathLoaded = ref(false);
+
+/** 现有界面用 user/system，Path 命令用 user/machine */
+function pathApiScope(): "user" | "machine" {
+  return envScope.value === "system" ? "machine" : "user";
+}
+
+async function loadPathEntries() {
+  pathLoading.value = true;
+  pathError.value = "";
+  pathNew.value = "";
+  try {
+    const res = await invoke<PathEntry[]>("get_env_path_entries", { scope: pathApiScope() });
+    pathEntries.value = Array.isArray(res) ? res : [];
+    pathLoaded.value = true;
+  } catch (e) {
+    pathEntries.value = [];
+    pathLoaded.value = false;
+    pathError.value = invokeError(e, "读取 Path 失败");
+  } finally {
+    pathLoading.value = false;
+  }
+}
+
+function removePathRow(index: number) {
+  pathEntries.value = pathEntries.value
+    .filter((_, i) => i !== index)
+    .map((entry, i) => ({ ...entry, index: i }));
+}
+
+function addPathRow() {
+  const value = pathNew.value;
+  if (!value) {
+    toast("路径不能为空", "warning");
+    return;
+  }
+  if (value.includes(";") || value.includes("\n") || value.includes("\r")) {
+    toast("路径不能包含分号或换行", "warning");
+    return;
+  }
+  if ([...value].length >= 260) {
+    toast("路径过长（须小于 260 字符）", "warning");
+    return;
+  }
+  pathEntries.value = [
+    ...pathEntries.value,
+    { index: pathEntries.value.length, value, exists: false, pending: true },
+  ];
+  pathNew.value = "";
+}
+
+async function savePathEntries() {
+  if (pathSaving.value || !pathLoaded.value) return;
+  pathSaving.value = true;
+  try {
+    await invoke("set_env_path_entries", {
+      scope: pathApiScope(),
+      entries: pathEntries.value.map((entry) => entry.value),
+    });
+    toast("Path 已保存", "success");
+    await loadPathEntries();
+    const res = await getEnvVars(envScope.value);
+    if (res) envVars.value = res;
+  } catch (e) {
+    toast(invokeError(e, "保存 Path 失败"), "error");
+  } finally {
+    pathSaving.value = false;
   }
 }
 
@@ -645,6 +796,7 @@ onMounted(async () => {
       rtProgress.value[p.id] = { stage: p.stage, pct: p.pct };
     }
   });
+  if (activeTab.value === "startup") void loadLogonTasks();
 });
 
 onUnmounted(() => {
@@ -742,6 +894,79 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+
+      <!-- 登录计划任务：触发器为登录时 -->
+      <div class="mt-4 rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3">
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div class="min-w-0">
+            <p class="text-xs font-semibold text-[var(--text-strong)]">
+              登录计划任务<span v-if="logonTasks">（{{ logonTasks.length }}）</span>
+            </p>
+            <p class="text-[10px] text-[var(--muted)]">任务计划程序里，触发器为「登录时」的任务</p>
+          </div>
+        </div>
+
+        <Spinner v-if="logonLoading" label="正在读取登录计划任务…" />
+        <p
+          v-else-if="logonError"
+          class="rounded-lg border border-[var(--card-border)] bg-[var(--card)] px-3 py-2 text-xs text-[#e5484d]"
+        >
+          {{ logonError }}
+        </p>
+        <p v-else-if="!logonTasks" class="text-xs text-[var(--muted)]">尚未加载登录计划任务</p>
+        <p v-else-if="logonTasks.length === 0" class="text-xs text-[var(--muted)]">没有发现登录时触发的计划任务</p>
+        <div v-else class="max-h-72 space-y-1.5 overflow-auto">
+          <div
+            v-for="task in logonTasks"
+            :key="logonKey(task)"
+            class="flex flex-wrap items-center gap-2 rounded-lg bg-[var(--card)] px-2.5 py-1.5"
+          >
+            <span
+              class="min-w-0 flex-1 truncate font-mono text-xs text-[var(--text-strong)]"
+              :title="`${task.taskPath}${task.taskName}`"
+            >
+              {{ task.taskPath }}{{ task.taskName }}
+            </span>
+            <span
+              class="shrink-0 text-[10px]"
+              :class="task.state === '已禁用' ? 'text-[var(--muted)]' : 'text-[var(--primary)]'"
+            >
+              {{ task.state || "—" }}
+            </span>
+            <span class="max-w-[8rem] truncate text-[10px] text-[var(--muted)]" :title="task.author">
+              {{ task.author || "—" }}
+            </span>
+            <div class="flex shrink-0 flex-wrap gap-1.5">
+              <Button
+                variant="primary"
+                size="sm"
+                :disabled="logonBusy !== '' || task.state !== '已禁用'"
+                @click="askToggleLogon(task, true)"
+              >
+                启用
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                :disabled="logonBusy !== '' || task.state === '已禁用'"
+                @click="askToggleLogon(task, false)"
+              >
+                禁用
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <ConfirmDialog
+        :open="logonConfirm !== null"
+        title="登录计划任务"
+        :message="`确定${logonConfirm?.enable ? '启用' : '禁用'}登录计划任务「${logonConfirm?.task.taskName ?? ''}」吗？`"
+        :confirm-text="logonConfirm?.enable ? '启用' : '禁用'"
+        :danger="!!logonConfirm && !logonConfirm.enable"
+        @update:open="(v: boolean) => { if (!v) logonConfirm = null; }"
+        @confirm="doToggleLogon"
+      />
     </Card>
 
     <!-- ===== 2. 服务 ===== -->
@@ -1098,6 +1323,67 @@ onUnmounted(() => {
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <!-- Path 条目：保留上面的变量表，这里只改 Path -->
+      <div class="mt-4 rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3">
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div class="min-w-0">
+            <p class="text-xs font-semibold text-[var(--text-strong)]">Path 条目</p>
+            <p class="text-[10px] text-[var(--muted)]">
+              {{ envScope === "user" ? "用户" : "系统" }} Path，按分号拆开。保存只改 Path，不动其他变量。
+              <span v-if="envScope === 'system'">系统 Path 需要管理员权限。</span>
+            </p>
+          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            :disabled="pathSaving || pathLoading || !pathLoaded"
+            @click="savePathEntries"
+          >
+            <Loader2 v-if="pathSaving" class="h-3.5 w-3.5 animate-spin" />
+            <Save v-else class="h-3.5 w-3.5" />
+            保存
+          </Button>
+        </div>
+
+        <p
+          v-if="pathError"
+          class="mb-2 rounded-lg border border-[var(--card-border)] bg-[var(--card)] px-3 py-2 text-xs text-[#e5484d]"
+        >
+          {{ pathError }}
+        </p>
+        <p v-if="pathLoading" class="mb-2 text-xs text-[var(--muted)]">正在读取 Path…</p>
+        <p v-else-if="pathLoaded && pathEntries.length === 0" class="mb-2 text-xs text-[var(--muted)]">
+          当前没有 Path 条目
+        </p>
+        <div v-else-if="pathEntries.length" class="mb-2 max-h-48 space-y-1 overflow-auto">
+          <div
+            v-for="(entry, i) in pathEntries"
+            :key="`${i}-${entry.value}`"
+            class="flex flex-wrap items-center gap-2 rounded-lg bg-[var(--card)] px-2.5 py-1.5"
+          >
+            <span class="w-6 shrink-0 text-[10px] text-[var(--muted)]">{{ i + 1 }}</span>
+            <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="entry.value">{{ entry.value }}</span>
+            <span class="shrink-0 text-[10px] text-[var(--muted)]">
+              {{ entry.pending ? "待保存" : entry.exists ? "存在" : "不存在" }}
+            </span>
+            <Button variant="danger" size="sm" :disabled="pathSaving" @click="removePathRow(i)">
+              删除
+            </Button>
+          </div>
+        </div>
+        <div v-if="pathLoaded" class="flex flex-wrap items-center gap-2">
+          <Input
+            v-model="pathNew"
+            class="min-w-[12rem] flex-1 font-mono"
+            placeholder="新增一条路径，例如 C:\Tools"
+            :disabled="pathSaving"
+          />
+          <Button variant="gray" size="sm" :disabled="pathSaving" @click="addPathRow">
+            <Plus class="h-3.5 w-3.5" /> 添加
+          </Button>
+        </div>
       </div>
 
       <!-- 编辑弹窗 -->

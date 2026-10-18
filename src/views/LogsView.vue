@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Download, FolderOpen, RefreshCw, Trash2 } from "lucide-vue-next";
+import { Download, FileArchive, FolderOpen, RefreshCw, Trash2 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
 import Button from "../components/ui/Button.vue";
@@ -10,6 +10,7 @@ import Switch from "../components/ui/Switch.vue";
 import Spinner from "../components/ui/Spinner.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import ConfirmDialog from "../components/ui/ConfirmDialog.vue";
+import { invoke } from "@tauri-apps/api/core";
 import { clearLogs, listLogs, openLogDir, readLog } from "../lib/tauri";
 import { toast } from "../lib/toast";
 
@@ -154,6 +155,28 @@ function exportLog() {
   toast(`已导出 ${shownLines.value.length} 行日志`, "success");
 }
 
+/* ---- 导出压缩包：优先当前选中的日志文件，未选择则打包列表中的全部 ---- */
+const exportingZip = ref(false);
+async function exportLogsZip() {
+  if (exportingZip.value) return;
+  const names = file.value ? [file.value] : [...(files.value ?? [])];
+  if (names.length === 0) {
+    toast("当前没有可导出的日志文件", "info");
+    return;
+  }
+  exportingZip.value = true;
+  try {
+    const r = await invoke<{ file?: string; count?: number; bytes?: number }>("export_logs_zip", { names });
+    const path = r?.file?.trim() ?? "";
+    toast(path ? `已导出压缩包：${path}` : "已导出压缩包", "success");
+  } catch (e) {
+    const msg = typeof e === "string" ? e : e instanceof Error ? e.message : "";
+    toast(msg.trim() || "导出压缩包失败", "error");
+  } finally {
+    exportingZip.value = false;
+  }
+}
+
 /* ---- 清空日志（二次确认） ---- */
 const showClear = ref(false);
 async function confirmClear() {
@@ -276,16 +299,26 @@ onBeforeUnmount(() => setLive(false));
 
     <!-- 底部操作栏 -->
     <div class="mt-3 flex flex-wrap items-center gap-3 px-1 text-xs text-[var(--muted)]">
-      <span>共 {{ allLines.length }} 行 · 筛选后 {{ filteredLines.length }} 行 · 显示 {{ levelLines.length }} 行</span>
-      <div class="ml-auto flex items-center gap-2">
+      <span class="min-w-0 max-w-full truncate">共 {{ allLines.length }} 行 · 筛选后 {{ filteredLines.length }} 行 · 显示 {{ levelLines.length }} 行</span>
+      <div class="ml-auto flex min-w-0 flex-wrap items-center gap-2">
         <Button variant="gray" size="sm" @click="openLogDir">
-          <FolderOpen class="h-3.5 w-3.5" /> 打开日志目录
+          <FolderOpen class="h-3.5 w-3.5 shrink-0" /> 打开日志目录
         </Button>
         <Button variant="gray" size="sm" @click="exportLog">
-          <Download class="h-3.5 w-3.5" /> 导出日志
+          <Download class="h-3.5 w-3.5 shrink-0" /> 导出日志
+        </Button>
+        <Button
+          variant="gray"
+          size="sm"
+          :disabled="exportingZip || files === null || (files.length === 0 && !file)"
+          title="打包当前选中的日志；未选择时打包全部"
+          @click="exportLogsZip"
+        >
+          <FileArchive class="h-3.5 w-3.5 shrink-0" />
+          <span class="max-w-[8rem] truncate">导出压缩包</span>
         </Button>
         <Button variant="danger" size="sm" :disabled="files !== null && files.length === 0" @click="showClear = true">
-          <Trash2 class="h-3.5 w-3.5" /> 清空日志
+          <Trash2 class="h-3.5 w-3.5 shrink-0" /> 清空日志
         </Button>
       </div>
     </div>

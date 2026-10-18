@@ -1,0 +1,16 @@
+极维工具箱 v1.0.0 发布文件校验
+生成时间：2026-10-18
+算法：SHA256
+
+极维工具箱_便携单文件.exe
+  大小：21740544 字节（20.73 MB）
+  SHA256：09ADA62DBFF7F10C6227E9EFF0E61686B5CE942602FC14846F204C12341673D8
+
+极维工具箱_Setup.exe
+  大小：8317344 字节（7.93 MB）
+  SHA256：01EC4A66D8EC0C9F01E37A3121681BF7B5F32A2DC8594CB41313702BC5FA29DC
+
+校验方法
+  Windows 资源管理器：右键文件 → 属性 → 校验和 标签页（Windows 11 部分版本支持）
+  PowerShell：Get-FileHash "文件路径" -Algorithm SHA256
+  命令提示符：certutil -hashfile "文件路径" SHA256

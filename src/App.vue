@@ -32,6 +32,12 @@ import ShellCmdView from "./views/ShellCmdView.vue";
 import ShortcutsView from "./views/ShortcutsView.vue";
 import ReportView from "./views/ReportView.vue";
 import FilterRulesView from "./views/FilterRulesView.vue";
+import SourcesView from "./views/SourcesView.vue";
+import AutoBackupView from "./views/AutoBackupView.vue";
+import HelpView from "./views/HelpView.vue";
+import StructuredLogView from "./views/StructuredLogView.vue";
+import ErrorCodesView from "./views/ErrorCodesView.vue";
+import AboutView from "./views/AboutView.vue";
 import SysToolsView from "./views/SysToolsView.vue";
 import LicenseView from "./views/LicenseView.vue";
 import LogsView from "./views/LogsView.vue";
@@ -59,6 +65,12 @@ const views: Record<string, unknown> = {
   shortcuts: ShortcutsView,
   report: ReportView,
   filter: FilterRulesView,
+  sources: SourcesView,
+  autobackup: AutoBackupView,
+  help: HelpView,
+  structuredlog: StructuredLogView,
+  errorcodes: ErrorCodesView,
+  about: AboutView,
   systools: SysToolsView,
   license: LicenseView,
   logs: LogsView,

@@ -451,35 +451,159 @@ fn delete_reg_key(path: &str) -> Result<(), String> {
     pk.delete_subkey_all(key_name).map_err(|e| format!("{}: {}", path, e))
 }
 
-/// 删除残留（文件 / 目录 / 注册表键）
+/// 占用（共享冲突 os error 32）或拒绝访问（PermissionDenied / os error 5）才登记重启后删除。
+fn should_delay_delete(kind: std::io::ErrorKind, raw_os: Option<i32>) -> bool {
+    kind == std::io::ErrorKind::PermissionDenied || matches!(raw_os, Some(32) | Some(5))
+}
+
+/// 盘符根（如 C:\、C:）和空路径不允许登记重启后删除，避免误删系统根。
+fn refused_reboot_path(path: &str) -> bool {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let mut rest = trimmed;
+    if let Some(stripped) = rest.strip_prefix(r"\\?\") {
+        rest = stripped;
+    } else if let Some(stripped) = rest.strip_prefix(r"\\.\") {
+        rest = stripped;
+    }
+    let rest = rest.trim_end_matches(|c| c == '\\' || c == '/');
+    if rest.is_empty() {
+        return true;
+    }
+    let bytes = rest.as_bytes();
+    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+/// 重启时 MoveFileEx 只删除空目录。列不出来或仍有子项都不能登记。
+fn dir_can_delay_delete(path: &str) -> bool {
+    match fs::read_dir(path) {
+        Ok(mut rd) => rd.next().is_none(),
+        Err(_) => false,
+    }
+}
+
+fn wide_nul(path: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    std::ffi::OsStr::new(path)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+fn move_file_ex_delay(path: &str) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_DELAY_UNTIL_REBOOT};
+
+    let wide = wide_nul(path);
+    // lpNewFileName 为空 + MOVEFILE_DELAY_UNTIL_REBOOT(0x4)：登记为下次重启后删除
+    let ok = unsafe {
+        MoveFileExW(
+            wide.as_ptr(),
+            std::ptr::null::<u16>(),
+            MOVEFILE_DELAY_UNTIL_REBOOT,
+        )
+    };
+    if ok != 0 {
+        return Ok(());
+    }
+    let code = unsafe { GetLastError() };
+    Err(format!("无法登记重启后删除（系统错误 {}）", code))
+}
+
+fn schedule_delay_delete(path: &str, is_dir: bool) -> Result<(), String> {
+    if refused_reboot_path(path) {
+        return Err(format!("{}: 拒绝登记盘符根或空路径", path));
+    }
+    if is_dir && !dir_can_delay_delete(path) {
+        // 非空目录即使 MoveFileEx 返回成功，重启时也删不掉，不能当成已安排。
+        return Err(format!("{}: 目录非空或被占用，无法登记重启后删除", path));
+    }
+    move_file_ex_delay(path).map_err(|e| format!("{}: {}", path, e))
+}
+
+/// Ok(true) = 已经删除；Ok(false) = 已安排重启后删除
+fn remove_fs_item(target: &str, is_dir: bool) -> Result<bool, String> {
+    let deleted = if is_dir {
+        fs::remove_dir_all(target)
+    } else {
+        fs::remove_file(target)
+    };
+    match deleted {
+        Ok(()) => Ok(true),
+        Err(e) if should_delay_delete(e.kind(), e.raw_os_error()) => {
+            schedule_delay_delete(target, is_dir)?;
+            Ok(false)
+        }
+        Err(e) => Err(format!("{}: 删除失败（{}）", target, e)),
+    }
+}
+
+fn residual_log(deleted: usize, scheduled: &[String], errs: &[String]) -> String {
+    let scheduled_part = if scheduled.is_empty() {
+        "已安排重启后删除 0 项".to_string()
+    } else {
+        format!(
+            "已安排重启后删除 {} 项: {}",
+            scheduled.len(),
+            scheduled.join(", ")
+        )
+    };
+    let mut text = format!("已删除 {} 项；{}", deleted, scheduled_part);
+    if !errs.is_empty() {
+        text.push_str(&format!("；未能处理 {} 项: {}", errs.len(), errs.join("; ")));
+    }
+    text
+}
+
+fn residual_failure(errs: &[String], scheduled: &[String]) -> String {
+    let mut msg = format!("未能清理：{}", errs.join("；"));
+    if !scheduled.is_empty() {
+        msg.push_str("；以下项已安排在下次重启后删除：");
+        msg.push_str(&scheduled.join("，"));
+    }
+    msg
+}
+
+/// 删除残留（文件 / 目录 / 注册表键）。
+/// 被占用或拒绝访问时登记为下次重启后删除；成功登记不算失败。
 #[tauri::command]
 pub fn remove_residual(items: Vec<ResidualItem>) -> Result<(), String> {
     let dirs = crate::dirs::load_dirs();
     let count = items.len();
     let mut errs = Vec::new();
+    let mut scheduled = Vec::new();
+    let mut deleted = 0usize;
     for item in items {
-        let r = match item.kind.as_str() {
-            "file" => fs::remove_file(&item.target).map_err(|e| format!("{}: {}", item.target, e)),
-            "dir" => fs::remove_dir_all(&item.target).map_err(|e| format!("{}: {}", item.target, e)),
-            "reg" => delete_reg_key(&item.target),
+        let step = match item.kind.as_str() {
+            "file" => remove_fs_item(&item.target, false),
+            "dir" => remove_fs_item(&item.target, true),
+            "reg" => delete_reg_key(&item.target).map(|_| true),
             _ => Err(format!("未知残留类型: {}", item.kind)),
         };
-        if let Err(e) = r {
-            errs.push(e);
+        match step {
+            Ok(true) => deleted += 1,
+            Ok(false) => scheduled.push(item.target),
+            Err(e) => errs.push(e),
         }
     }
-    let r = if errs.is_empty() { Ok(()) } else { Err(errs.join("; ")) };
-    let outcome = match &r {
-        Ok(_) => "成功".to_string(),
-        Err(e) => format!("部分失败: {}", e),
-    };
-    crate::logs::op_log(&dirs, "uninstall", "remove_residual", &format!("清理 {} 项残留: {}", count, outcome));
-    r
+    crate::logs::op_log(
+        &dirs,
+        "uninstall",
+        "remove_residual",
+        &format!("清理 {} 项残留: {}", count, residual_log(deleted, &scheduled, &errs)),
+    );
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(residual_failure(&errs, &scheduled))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::args_ref_is_shell;
+    use super::{args_ref_is_shell, refused_reboot_path, should_delay_delete};
 
     #[test]
     fn shell_metachars_are_flagged() {
@@ -517,5 +641,42 @@ mod tests {
         assert_eq!(exe.to_ascii_lowercase(), "msiexec.exe");
         assert_eq!(args, "/X{1234-5678} /qn");
         assert!(args.to_ascii_uppercase().starts_with("/X"));
+    }
+
+    #[test]
+    fn should_delay_delete_on_permission_denied() {
+        assert!(should_delay_delete(std::io::ErrorKind::PermissionDenied, None));
+        assert!(should_delay_delete(std::io::ErrorKind::PermissionDenied, Some(5)));
+    }
+
+    #[test]
+    fn should_delay_delete_on_os_error_32() {
+        // kind 不是 PermissionDenied，只靠原始错误码 32（ERROR_SHARING_VIOLATION）
+        assert!(should_delay_delete(std::io::ErrorKind::AlreadyExists, Some(32)));
+    }
+
+    #[test]
+    fn should_delay_delete_on_os_error_5() {
+        assert!(should_delay_delete(std::io::ErrorKind::AlreadyExists, Some(5)));
+    }
+
+    #[test]
+    fn should_delay_delete_not_found_is_false() {
+        assert!(!should_delay_delete(std::io::ErrorKind::NotFound, None));
+        assert!(!should_delay_delete(std::io::ErrorKind::NotFound, Some(2)));
+    }
+
+    #[test]
+    fn refused_reboot_path_blocks_drive_root_and_empty() {
+        assert!(refused_reboot_path(""));
+        assert!(refused_reboot_path("   "));
+        assert!(refused_reboot_path("C:"));
+        assert!(refused_reboot_path(r"C:\"));
+        assert!(refused_reboot_path("c:/"));
+        assert!(refused_reboot_path(r"D:\"));
+        assert!(refused_reboot_path(r"\\?\C:\"));
+        assert!(!refused_reboot_path(r"C:\Windows"));
+        assert!(!refused_reboot_path(r"C:\Windows\"));
+        assert!(!refused_reboot_path(r"C:\Program Files\App"));
     }
 }

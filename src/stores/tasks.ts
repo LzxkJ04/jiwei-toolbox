@@ -25,6 +25,12 @@ export interface QueueTask {
   eta?: string;
   /** 返回码 / 失败原因摘要 */
   code?: string;
+  /** 当前阶段（download / verify / install / done / error），有值时优先用它判断展示 */
+  stage?: string;
+  /** 单任务安装参数：静默安装（覆盖全局） */
+  installSilent?: boolean;
+  /** 单任务安装参数：自定义安装目录 */
+  installDir?: string;
   /** 开始 / 结束时间戳（毫秒），用于统计耗时 */
   _startTs?: number;
   _endTs?: number;
@@ -211,6 +217,29 @@ export const useTasksStore = defineStore("tasks", {
     remove(id: string) {
       const idx = this.tasks.findIndex((t) => t.id === id);
       if (idx >= 0) this.tasks.splice(idx, 1);
+    },
+    /**
+     * 从崩溃快照恢复任务：按 id 去重，状态一律重置为 pending。
+     * 返回实际恢复的条数（已在队列里的会跳过）。
+     */
+    restoreTasks(list: Partial<QueueTask>[]): number {
+      let n = 0;
+      for (const s of list) {
+        const id = (s.id ?? "").trim();
+        if (!id) continue;
+        if (this.tasks.some((t) => t.id === id)) continue;
+        this.tasks.push({
+          id,
+          name: s.name || id,
+          kind: "install",
+          status: "pending",
+          // 保留已下载进度，便于断点续传；但任务状态仍是等待
+          progress: Math.max(0, Math.min(90, s.progress ?? 0)),
+          message: s.message || "等待中",
+        });
+        n++;
+      }
+      return n;
     },
     /** 重试单个失败任务：重置进度后重新入队 */
     retry(id: string): boolean {
