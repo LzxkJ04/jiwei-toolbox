@@ -614,6 +614,20 @@ export const setService = (name: string, action: string) =>
   tryCall<null>("set_service", { name, action });
 export const readHosts = () => tryCall<string>("read_hosts");
 export const writeHosts = (content: string) => tryCall<null>("write_hosts", { content });
+
+/** hosts 结构化条目 */
+export interface HostEntry {
+  ip: string;
+  domains: string[];
+  /** 以 # 注释掉的视为停用 */
+  enabled: boolean;
+  /** 系统自带示例行（localhost 映射），界面默认折叠 */
+  builtin: boolean;
+}
+
+export const parseHosts = () => tryCall<HostEntry[]>("parse_hosts");
+export const listHostsBackups = () => tryCall<string[]>("list_hosts_backups");
+export const readHostsBackup = (file: string) => tryCall<string>("read_hosts_backup", { file });
 export const scanJunk = () => tryCall<JunkItem[]>("scan_junk");
 export const cleanJunk = (paths: string[]) => tryCall<null>("clean_junk", { paths });
 export const getEnvVars = (scope: "user" | "system") => tryCall<EnvVar[]>("get_env_vars", { scope });

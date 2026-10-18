@@ -19,8 +19,9 @@ import {
   cleanJunk, driverList, exportDriverList, getEnvVars, listRuntimeLibs, listServices,
   listStartup, listDisabledStartup, listUwp, onRuntimeProgress, readHosts, removeUwp, installRuntime,
   scanJunk, setEnvVar, setService, toggleStartup, writeHosts,
-  type DisabledStartup, type DriverInfo, type EnvVar, type JunkItem, type RuntimeLib,
-  type ServiceItem, type StartupItem, type UwpApp,
+  parseHosts, listHostsBackups, readHostsBackup,
+  type DisabledStartup, type DriverInfo, type EnvVar, type HostEntry, type JunkItem,
+  type RuntimeLib, type ServiceItem, type StartupItem, type UwpApp,
 } from "../lib/tauri";
 import { toast } from "../lib/toast";
 import { formatBytes } from "../lib/utils";
@@ -152,11 +153,25 @@ async function loadServices() {
 const filteredServices = computed(() => {
   const list = services.value ?? [];
   const q = svcSearch.value.trim().toLowerCase();
-  if (!q) return list;
-  return list.filter((s) =>
-    `${s.name} ${s.display} ${s.status}`.toLowerCase().includes(q)
-  );
+  let out = q
+    ? list.filter((s) => `${s.name} ${s.display} ${s.status}`.toLowerCase().includes(q))
+    : list.slice();
+  if (svcRunningOnly.value) {
+    out = out.filter((s) => svcStatusClass(s.status).includes("30a46c"));
+  }
+  if (svcAutoOnly.value) {
+    out = out.filter((s) => s.start_type.toLowerCase().includes("auto"));
+  }
+  return out;
 });
+
+const svcRunningOnly = ref(false);
+const svcAutoOnly = ref(false);
+
+/** 当前筛选结果里有多少在运行 */
+const svcRunningCount = computed(
+  () => (services.value ?? []).filter((s) => svcStatusClass(s.status).includes("30a46c")).length
+);
 
 function svcStatusClass(status: string) {
   const v = status.toLowerCase();
@@ -180,22 +195,173 @@ const hostsContent = ref("");
 const hostsLoading = ref(false);
 const hostsSaving = ref(false);
 const hostsConfirm = ref(false);
+/** structured = 条目视图，raw = 原始文本编辑 */
+const hostsMode = ref<"structured" | "raw">("structured");
+const hostEntries = ref<HostEntry[]>([]);
+const hostsBackups = ref<string[]>([]);
+const hostsBusy = ref(false);
+const hostsNewIp = ref("127.0.0.1");
+const hostsNewDomain = ref("");
+const hostsRestoreFile = ref<string | null>(null);
+const hostsShowBuiltin = ref(false);
+
+/** 界面展示用：默认隐藏 localhost 示例行 */
+const visibleHostEntries = computed(() => {
+  const list = hostEntries.value.map((e, i) => ({ e, i }));
+  return hostsShowBuiltin.value ? list : list.filter((x) => !x.e.builtin);
+});
+const builtinCount = computed(() => hostEntries.value.filter((e) => e.builtin).length);
 
 async function loadHosts() {
   hostsLoading.value = true;
-  const res = await readHosts();
+  const [raw, entries, backups] = await Promise.all([
+    readHosts(),
+    parseHosts(),
+    listHostsBackups(),
+  ]);
   hostsLoading.value = false;
-  if (res !== null) {
-    hostsContent.value = res;
+  if (raw !== null) {
+    hostsContent.value = raw;
     loaded.value.hosts = true;
   }
+  hostEntries.value = entries ?? [];
+  hostsBackups.value = backups ?? [];
 }
 
 async function saveHosts() {
   hostsSaving.value = true;
   const res = await writeHosts(hostsContent.value);
   hostsSaving.value = false;
-  if (res !== null) toast("hosts 文件已保存", "success");
+  if (res !== null) {
+    toast("hosts 文件已保存", "success");
+    await loadHosts();
+  }
+}
+
+/** 从磁盘重新载入并解析（放弃未保存修改） */
+async function reloadHosts() {
+  await loadHosts();
+  toast("已重新载入 hosts", "info");
+}
+
+/** 把条目重建成 hosts 文本：保留原有注释块与空行，只改动条目行 */
+function rebuildFromEntries() {
+  const lines = hostsContent.value.split(/\r?\n/);
+  const queue = hostEntries.value.slice();
+  const out: string[] = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t || (t.startsWith("#") && !looksLikeEntry(t))) {
+      out.push(line);
+      continue;
+    }
+    // 这是一条条目行：用队列里的下一条替换
+    const e = queue.shift();
+    if (!e) continue;
+    const body = `${e.ip}\t${e.domains.join(" ")}`;
+    out.push(e.enabled ? body : `# ${body}`);
+  }
+  // 剩下的（新增条目）追加到末尾
+  for (const e of queue) {
+    const body = `${e.ip}\t${e.domains.join(" ")}`;
+    out.push(e.enabled ? body : `# ${body}`);
+  }
+  hostsContent.value = out.join("\n");
+}
+
+function looksLikeEntry(line: string) {
+  const body = line.trim().replace(/^#+\s*/, "");
+  const first = body.split(/\s+/)[0] ?? "";
+  return first.length > 0 && first.split("").every((c) => /[0-9.:]/.test(c));
+}
+
+/** 切换某条启用状态（一行可能含多个域名） */
+async function toggleHostEntry(idx: number, enable: boolean) {
+  const e = hostEntries.value[idx];
+  if (!e) return;
+  hostEntries.value[idx] = { ...e, enabled: enable };
+  rebuildFromEntries();
+  hostsBusy.value = true;
+  const res = await writeHosts(hostsContent.value);
+  hostsBusy.value = false;
+  if (res === null) {
+    // 失败回滚界面状态
+    hostEntries.value[idx] = e;
+    rebuildFromEntries();
+    return;
+  }
+  toast(`已${enable ? "启用" : "停用"} ${e.domains.join(", ")}`, "success");
+}
+
+/** 新增一条 hosts 记录 */
+async function addHostEntry() {
+  const ip = hostsNewIp.value.trim();
+  const domain = hostsNewDomain.value.trim();
+  if (!/^[0-9a-fA-F:.]+$/.test(ip)) {
+    toast("IP 地址格式不正确", "warning");
+    return;
+  }
+  if (!/^[a-zA-Z0-9._-]+$/.test(domain)) {
+    toast("域名只能包含字母、数字、点、下划线和连字符", "warning");
+    return;
+  }
+  const exists = hostEntries.value.some(
+    (e) => e.ip === ip && e.domains.some((d) => d.toLowerCase() === domain.toLowerCase())
+  );
+  if (exists) {
+    toast("这条记录已存在", "info");
+    return;
+  }
+  hostEntries.value.push({ ip, domains: [domain], enabled: true, builtin: false });
+  rebuildFromEntries();
+  hostsBusy.value = true;
+  const res = await writeHosts(hostsContent.value);
+  hostsBusy.value = false;
+  if (res === null) {
+    hostEntries.value.pop();
+    rebuildFromEntries();
+    return;
+  }
+  hostsNewDomain.value = "";
+  toast(`已添加 ${ip} → ${domain}`, "success");
+  await loadHosts();
+}
+
+/** 删除一条记录 */
+async function removeHostEntry(idx: number) {
+  const e = hostEntries.value[idx];
+  if (!e) return;
+  hostEntries.value.splice(idx, 1);
+  rebuildFromEntries();
+  hostsBusy.value = true;
+  const res = await writeHosts(hostsContent.value);
+  hostsBusy.value = false;
+  if (res === null) {
+    await loadHosts();
+    return;
+  }
+  toast(`已删除 ${e.domains.join(", ")}`, "success");
+  await loadHosts();
+}
+
+/** 用某个备份覆盖当前 hosts */
+async function restoreHostsBackup() {
+  const file = hostsRestoreFile.value;
+  if (!file) return;
+  hostsBusy.value = true;
+  const text = await readHostsBackup(file);
+  if (text === null) {
+    hostsBusy.value = false;
+    return;
+  }
+  hostsContent.value = text;
+  const res = await writeHosts(text);
+  hostsBusy.value = false;
+  hostsRestoreFile.value = null;
+  if (res !== null) {
+    toast("已从备份恢复 hosts", "success");
+    await loadHosts();
+  }
 }
 
 /* ============ 4. 垃圾清理 ============ */
@@ -558,6 +724,34 @@ onUnmounted(() => {
         </Button>
       </div>
 
+      <!-- 快捷筛选 -->
+      <div v-if="services" class="mb-3 flex flex-wrap items-center gap-2 text-xs">
+        <button
+          type="button"
+          class="rounded-full px-2.5 py-1 font-medium transition-colors"
+          :class="svcRunningOnly ? 'bg-[#30a46c] text-white' : 'bg-[#30a46c]/12 text-[#30a46c]'"
+          @click="svcRunningOnly = !svcRunningOnly"
+        >
+          只看运行中 {{ svcRunningCount }}
+        </button>
+        <button
+          type="button"
+          class="rounded-full px-2.5 py-1 font-medium transition-colors"
+          :class="svcAutoOnly ? 'bg-[var(--primary)] text-white' : 'bg-[var(--primary-soft)] text-[var(--primary)]'"
+          @click="svcAutoOnly = !svcAutoOnly"
+        >
+          只看自动启动
+        </button>
+        <button
+          v-if="svcRunningOnly || svcAutoOnly"
+          type="button"
+          class="rounded-full bg-[var(--btn-gray)] px-2.5 py-1 text-[var(--muted)]"
+          @click="svcRunningOnly = false; svcAutoOnly = false"
+        >
+          清除筛选
+        </button>
+      </div>
+
       <Spinner v-if="svcLoading" label="正在枚举系统服务…" />
       <EmptyState v-else-if="!services" icon="⚙️" text="尚未加载服务列表" sub="点击「刷新」枚举本机系统服务（操作需管理员权限）" />
       <EmptyState v-else-if="filteredServices.length === 0" icon="🔍" text="没有匹配的服务" sub="试试调整搜索词" />
@@ -600,12 +794,35 @@ onUnmounted(() => {
     <!-- ===== 3. Hosts 编辑 ===== -->
     <Card v-else-if="activeTab === 'hosts'" class="p-5">
       <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <h4 class="font-semibold">Hosts 文件编辑</h4>
-        <div class="flex items-center gap-2">
-          <Button variant="gray" size="sm" :disabled="hostsLoading" @click="loadHosts">
-            <RotateCcw class="h-3.5 w-3.5" /> 恢复（重新载入）
+        <div class="flex flex-wrap items-center gap-2">
+          <h4 class="font-semibold">Hosts 文件</h4>
+          <span class="text-xs text-[var(--muted)]">
+            {{ hostEntries.length }} 条记录 · {{ hostEntries.filter((e) => e.enabled).length }} 条生效
+          </span>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <div class="flex gap-1 rounded-lg border border-[var(--card-border)] bg-[var(--card-soft)] p-1">
+            <button
+              v-for="m in [{ v: 'structured', l: '条目视图' }, { v: 'raw', l: '原始文本' }]"
+              :key="m.v"
+              type="button"
+              class="rounded px-2 py-1 text-xs"
+              :class="hostsMode === m.v ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted)]'"
+              @click="hostsMode = m.v as never"
+            >
+              {{ m.l }}
+            </button>
+          </div>
+          <Button variant="gray" size="sm" :disabled="hostsLoading" @click="reloadHosts">
+            <RotateCcw class="h-3.5 w-3.5" /> 重新载入
           </Button>
-          <Button variant="primary" size="sm" :disabled="hostsLoading || hostsSaving" @click="hostsConfirm = true">
+          <Button
+            v-if="hostsMode === 'raw'"
+            variant="primary"
+            size="sm"
+            :disabled="hostsLoading || hostsSaving"
+            @click="hostsConfirm = true"
+          >
             <Save class="h-3.5 w-3.5" /> 保存
           </Button>
         </div>
@@ -613,16 +830,113 @@ onUnmounted(() => {
 
       <Spinner v-if="hostsLoading" label="正在读取 hosts 文件…" />
       <template v-else>
-        <textarea
-          v-model="hostsContent"
-          rows="18"
-          spellcheck="false"
-          class="input-base w-full resize-y font-mono text-xs leading-relaxed"
-          placeholder="# 加载失败或文件为空，可点击「恢复（重新载入）」重试"
-        />
-        <p class="mt-2 text-xs text-[var(--muted)]">
-          保存需管理员权限；「恢复」会放弃当前修改并重新从磁盘载入
-        </p>
+        <!-- 条目视图 -->
+        <template v-if="hostsMode === 'structured'">
+          <div class="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-2.5">
+            <Input v-model="hostsNewIp" placeholder="IP" class="w-32" />
+            <span class="text-xs text-[var(--muted)]">→</span>
+            <div class="min-w-[160px] flex-1">
+              <Input v-model="hostsNewDomain" placeholder="域名，如 example.com" @keyup.enter="addHostEntry" />
+            </div>
+            <Button variant="primary" size="sm" :disabled="hostsBusy" @click="addHostEntry">
+              <Plus class="h-3.5 w-3.5" /> 添加
+            </Button>
+          </div>
+
+          <EmptyState
+            v-if="!visibleHostEntries.length"
+            icon="🌐"
+            text="hosts 里还没有自定义记录"
+            sub="上面填 IP 和域名即可添加；默认只有注释说明"
+          />
+          <div v-else class="max-h-[440px] divide-y divide-[var(--card-border)] overflow-y-auto rounded-xl border border-[var(--card-border)]">
+            <div
+              v-for="{ e, i } in visibleHostEntries"
+              :key="`${e.ip}-${i}`"
+              class="flex flex-wrap items-center gap-2 px-3 py-2 text-xs transition-colors hover:bg-[var(--card-soft)]"
+              :class="!e.enabled && 'opacity-60'"
+            >
+              <Switch
+                :checked="e.enabled"
+                :disabled="hostsBusy"
+                class="scale-90"
+                @update:checked="(v: boolean) => toggleHostEntry(i, v)"
+              />
+              <span class="shrink-0 rounded bg-[var(--btn-gray)] px-1.5 py-0.5 font-mono text-[10px]">{{ e.ip }}</span>
+              <span class="min-w-0 flex-1 truncate font-mono" :title="e.domains.join(' ')">
+                {{ e.domains.join(" · ") }}
+              </span>
+              <span v-if="e.builtin" class="shrink-0 text-[10px] text-[var(--muted)]">系统示例</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="text-[var(--muted)] hover:text-[#e5484d]"
+                :disabled="hostsBusy"
+                title="删除这条记录"
+                @click="removeHostEntry(i)"
+              >
+                <Trash2 class="h-3 w-3" />
+              </Button>
+            </div>
+          </div>
+          <div class="mt-2 flex flex-wrap items-center gap-2">
+            <Button
+              v-if="builtinCount"
+              variant="ghost"
+              size="sm"
+              class="text-[var(--muted)]"
+              @click="hostsShowBuiltin = !hostsShowBuiltin"
+            >
+              {{ hostsShowBuiltin ? "隐藏" : "显示" }}系统示例（{{ builtinCount }}）
+            </Button>
+            <p class="text-xs text-[var(--muted)]">
+              开关直接写入系统 hosts（需管理员权限），每次写入前会自动备份原文件。
+            </p>
+          </div>
+        </template>
+
+        <!-- 原始文本 -->
+        <template v-else>
+          <textarea
+            v-model="hostsContent"
+            rows="18"
+            spellcheck="false"
+            class="input-base w-full resize-y font-mono text-xs leading-relaxed"
+            placeholder="# 加载失败或文件为空，可点击「重新载入」重试"
+          />
+          <p class="mt-2 text-xs text-[var(--muted)]">
+            保存需管理员权限；「重新载入」会放弃当前修改并从磁盘重读
+          </p>
+        </template>
+
+        <!-- 备份回滚 -->
+        <div class="mt-4 border-t border-[var(--card-border)] pt-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-medium text-[var(--text-strong)]">历史备份</span>
+            <span class="text-[10px] text-[var(--muted)]">{{ hostsBackups.length }} 份</span>
+            <div class="ml-auto flex items-center gap-2">
+              <Select
+                :model-value="hostsRestoreFile ?? ''"
+                :options="hostsBackups.map((f) => ({ value: f, label: f }))"
+                placeholder="选择备份文件"
+                class="w-56"
+                :disabled="!hostsBackups.length"
+                @update:model-value="(v: string) => (hostsRestoreFile = v || null)"
+              />
+              <Button
+                variant="gray"
+                size="sm"
+                :disabled="!hostsRestoreFile || hostsBusy"
+                @click="restoreHostsBackup"
+              >
+                <RotateCcw class="h-3.5 w-3.5" /> 恢复此备份
+              </Button>
+            </div>
+          </div>
+          <p v-if="!hostsBackups.length" class="mt-1.5 text-[10px] text-[var(--muted)]">
+            还没有备份。首次保存 hosts 后会自动在配置目录留一份原文件。
+          </p>
+        </div>
       </template>
 
       <ConfirmDialog

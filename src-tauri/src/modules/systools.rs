@@ -328,17 +328,133 @@ pub async fn read_hosts() -> Result<String, String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// 写入 hosts（需管理员权限）
+/// 写入 hosts（需管理员权限）。写之前把原文件复制到配置目录，便于回滚。
 #[tauri::command]
 pub fn write_hosts(content: String) -> Result<(), String> {
     let dirs = crate::dirs::load_dirs();
+    // 先留一份原文件；备份失败不阻止写入，但会记进日志
+    let backup_note = match std::fs::read(HOSTS_PATH) {
+        Ok(old) => {
+            let dir = std::path::Path::new(&dirs.config).join("hosts备份");
+            let r = std::fs::create_dir_all(&dir).and_then(|_| {
+                let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+                std::fs::write(dir.join(format!("hosts-{stamp}.txt")), &old)
+            });
+            match r {
+                Ok(_) => "已备份原文件".to_string(),
+                Err(e) => format!("原文件备份失败: {e}"),
+            }
+        }
+        Err(e) => format!("读取原文件失败(可能是首次写入): {e}"),
+    };
     let r = std::fs::write(HOSTS_PATH, &content).map_err(|e| format!("写入失败（需要管理员权限）: {}", e));
     let outcome = match &r {
         Ok(_) => "成功".to_string(),
         Err(e) => format!("失败: {}", e),
     };
-    crate::logs::op_log(&dirs, "systools", "write_hosts", &format!("写入 hosts（{} 字节）: {}", content.len(), outcome));
+    crate::logs::op_log(
+        &dirs,
+        "systools",
+        "write_hosts",
+        &format!("写入 hosts（{} 字节）: {}；{}", content.len(), outcome, backup_note),
+    );
     r
+}
+
+/// hosts 里的一条记录（一行解析成一条）
+#[derive(Serialize)]
+pub struct HostEntry {
+    pub ip: String,
+    pub domains: Vec<String>,
+    /// 以 # 开头视为停用
+    pub enabled: bool,
+    /// 仅指向 localhost 的默认示例行（界面默认折叠，避免看着像自定义记录）
+    pub builtin: bool,
+}
+
+/// 系统自带示例：localhost / 127.0.0.1 / ::1 的映射，不算用户自定义
+fn is_builtin_entry(domains: &[String]) -> bool {
+    !domains.is_empty()
+        && domains
+            .iter()
+            .all(|d| d.eq_ignore_ascii_case("localhost") || d.starts_with("localhost."))
+}
+
+/// 把 hosts 文本解析成结构化条目。纯函数，便于单测。
+/// 说明：同一行可以有多个域名（1.2.3.4 a.com b.com），要拆开。
+fn parse_hosts_entries(text: &str) -> Vec<HostEntry> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let enabled = !trimmed.starts_with('#');
+        // 去掉注释后再切字段；停用行还要去掉开头的 # 才看得到真实内容
+        let body = if enabled { trimmed } else { trimmed.trim_start_matches('#') };
+        let body = body.split('#').next().unwrap_or("").trim();
+        if body.is_empty() {
+            continue;
+        }
+        let mut parts = body.split_whitespace();
+        let Some(ip) = parts.next() else { continue };
+        // 首段必须像 IP，否则是纯注释行
+        if !ip.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ':') {
+            continue;
+        }
+        let domains: Vec<String> = parts.map(|s| s.to_string()).collect();
+        if domains.is_empty() {
+            continue;
+        }
+        let builtin = is_builtin_entry(&domains);
+        out.push(HostEntry {
+            ip: ip.to_string(),
+            domains,
+            enabled,
+            builtin,
+        });
+    }
+    out
+}
+
+/// 结构化读取 hosts 条目
+#[tauri::command]
+pub async fn parse_hosts() -> Result<Vec<HostEntry>, String> {
+    let bytes = std::fs::read(HOSTS_PATH).map_err(|e| e.to_string())?;
+    Ok(parse_hosts_entries(&String::from_utf8_lossy(&bytes)))
+}
+
+/// 列出 hosts 历史备份（文件名，新的在前）
+#[tauri::command]
+pub async fn list_hosts_backups() -> Vec<String> {
+    let dirs = crate::dirs::load_dirs();
+    let dir = std::path::Path::new(&dirs.config).join("hosts备份");
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return vec![];
+    };
+    let mut names: Vec<String> = rd
+        .flatten()
+        .filter(|e| e.path().extension().map(|x| x == "txt").unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names.reverse();
+    names.truncate(30);
+    names
+}
+
+/// 读取某个 hosts 备份的内容（用于预览/回滚）
+#[tauri::command]
+pub async fn read_hosts_backup(file: String) -> Result<String, String> {
+    let name = file.trim();
+    // 只接受本目录下的 .txt 文件名，防止路径穿越
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("备份文件名非法".into());
+    }
+    let dirs = crate::dirs::load_dirs();
+    let path = std::path::Path::new(&dirs.config).join("hosts备份").join(name);
+    let bytes = std::fs::read(&path).map_err(|e| format!("读取失败: {e}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 // ---------- 运行库检测与安装 ----------
@@ -824,5 +940,32 @@ mod tests {
         assert!(validate_env_name(&"X".repeat(256)).is_err());
         assert!(validate_env_name("PATH").is_ok());
         assert!(validate_env_name(" MY_VAR ").is_ok());
+    }
+
+    #[test]
+    fn hosts_entries_parse_multiline_and_disabled() {
+        let text = "# 默认注释\n127.0.0.1 localhost\n\n1.2.3.4 a.com b.com  # 行尾注释\n#6.6.6.6 blocked.cn\n::1 ipv6.local\n";
+        let list = parse_hosts_entries(text);
+        assert_eq!(list.len(), 4, "应跳过纯注释与空行");
+        assert_eq!(list[0].ip, "127.0.0.1");
+        assert_eq!(list[0].domains, vec!["localhost"]);
+        assert!(list[0].enabled);
+        // 一行多域名要拆开
+        assert_eq!(list[1].ip, "1.2.3.4");
+        assert_eq!(list[1].domains, vec!["a.com", "b.com"]);
+        // 注释掉的记录仍是可识别的条目，只是 enabled=false
+        assert_eq!(list[2].ip, "6.6.6.6");
+        assert!(!list[2].enabled);
+        assert_eq!(list[3].ip, "::1");
+        // 索引 0 是 127.0.0.1 localhost，属于系统示例
+        assert!(list[0].builtin, "localhost 映射是系统示例");
+        assert!(!list[1].builtin);
+    }
+
+    #[test]
+    fn hosts_entries_ignore_prose_comments() {
+        // 以 # 开头但内容不是 IP 的行不算条目
+        let text = "# Copyright (c) 1993-2009 Microsoft Corp.\n# localhost name resolution\n";
+        assert!(parse_hosts_entries(text).is_empty());
     }
 }
