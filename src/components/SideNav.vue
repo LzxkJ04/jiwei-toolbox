@@ -25,7 +25,7 @@ function toggleTheme() {
         :title="route.collapsed ? item.label : undefined"
         :class="
           cn(
-            'relative flex w-full cursor-pointer items-center gap-3 rounded-lg py-2 text-sm transition-colors',
+            'relative flex w-full cursor-pointer items-center gap-3 overflow-hidden rounded-lg py-2 text-sm transition-all duration-200',
             route.collapsed ? 'justify-center px-0' : 'px-3',
             route.active === item.id
               ? 'bg-[var(--primary-soft)] font-semibold text-[var(--primary)]'

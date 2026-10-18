@@ -57,8 +57,8 @@ function onCheck(v: boolean) {
       <SoftwareIcon :item="item" />
 
       <div class="min-w-0 flex-1">
-        <div class="flex items-center gap-2">
-          <span class="truncate font-semibold">{{ item.name || "未知软件" }}</span>
+        <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+          <span class="max-w-full truncate font-semibold">{{ item.name || "未知软件" }}</span>
           <!-- 授权标签 -->
           <Badge :tone="licenseTone">{{ licenseLabel }}</Badge>
           <!-- 收藏角标（收藏页快捷取消收藏） -->

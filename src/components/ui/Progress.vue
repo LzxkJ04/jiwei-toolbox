@@ -19,7 +19,8 @@ const tones: Record<string, string> = {
 <template>
   <div :class="cn('h-2 w-full overflow-hidden rounded-full bg-[var(--btn-gray)]', props.class)">
     <div
-      class="h-full rounded-full transition-[width] duration-200"
+      class="progress-fill h-full rounded-full transition-[width] duration-300 ease-out"
+      :class="(props.value ?? 0) > 0 && (props.value ?? 0) < 100 && 'is-running'"
       :style="{ width: `${Math.min(100, Math.max(0, props.value ?? 0))}%`, background: tones[props.tone ?? 'primary'] }"
     />
   </div>

@@ -251,7 +251,7 @@ function canNext() {
 
     <!-- 右侧内容 -->
     <div class="flex min-w-0 flex-1 flex-col">
-      <div class="min-h-0 flex-1 overflow-y-auto px-9 pb-3 pt-8">
+      <div class="min-h-0 min-w-0 flex-1 overflow-x-clip overflow-y-auto px-6 pb-3 pt-8 lg:px-9">
         <!-- 0 欢迎 -->
         <section v-if="step === 0" class="page-enter">
           <h2 class="text-2xl font-bold">欢迎安装极维工具箱</h2>

@@ -99,6 +99,8 @@ body {
   /* ---------- 毛玻璃卡片 ---------- */
   .glass-card {
     position: relative;
+    min-width: 0;
+    max-width: 100%;
     background: var(--card);
     backdrop-filter: blur(18px);
     -webkit-backdrop-filter: blur(18px);
@@ -106,14 +108,14 @@ body {
     border-radius: 16px;
     box-shadow: 0 4px 24px rgb(0 0 0 / 0.08);
     transition:
-      transform 0.22s cubic-bezier(0.25, 0.8, 0.35, 1),
-      box-shadow 0.22s ease,
-      border-color 0.22s ease,
-      background-color 0.22s ease;
+      transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 0.28s ease,
+      background-color 0.28s ease;
   }
   .glass-card.hover-lift:hover {
     transform: translateY(-3px);
-    box-shadow: 0 14px 36px rgb(0 0 0 / 0.16);
+    box-shadow: 0 16px 40px rgb(0 0 0 / 0.16);
     border-color: var(--primary-glow);
   }
 
@@ -201,19 +203,110 @@ body {
 
   /* ---------- 页面切换动画 ---------- */
   .page-enter {
-    animation: fadeInUp 0.3s cubic-bezier(0.25, 0.8, 0.35, 1);
+    animation: fadeInUp 0.42s cubic-bezier(0.22, 1, 0.36, 1);
   }
+}
+
+/* 主内容区：纵向可滚，横向绝不把窗口撑出滚动条 */
+.app-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: clip;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+.page-frame {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 72rem;
+  min-width: 0;
+  margin-inline: auto;
+  padding: 1.25rem 1.25rem 2.25rem;
+  overflow-x: clip;
+}
+@media (min-width: 640px) {
+  .page-frame {
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+
+/* 网格/弹性子项默认 min-width:auto，长路径和表格会把整页撑破 */
+.page-frame .grid,
+.page-frame .grid > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.page-frame .flex:not(.flex-col) {
+  flex-wrap: wrap;
+}
+.page-frame .flex {
+  min-width: 0;
+}
+.page-frame .min-w-\[220px\] {
+  min-width: min(220px, 100%);
+}
+
+/* 卡片内部裁切溢出；下拉和弹窗在 portal 里，不受影响 */
+.page-frame .glass-card {
+  overflow: clip;
+}
+.page-frame .overflow-x-auto,
+.page-frame .no-scrollbar {
+  max-width: 100%;
+}
+.page-frame :where(p, td, th, li, h2, h3, h4, dd, code, pre) {
+  overflow-wrap: anywhere;
+}
+.page-frame table {
+  max-width: none;
 }
 
 @keyframes fadeInUp {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    translate: 0 12px;
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    translate: 0 0;
   }
+}
+
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    translate: 0 10px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+.page-enter .glass-card {
+  animation: cardIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.page-enter .glass-card:nth-child(2) { animation-delay: 0.04s; }
+.page-enter .glass-card:nth-child(3) { animation-delay: 0.08s; }
+.page-enter .glass-card:nth-child(4) { animation-delay: 0.12s; }
+.page-enter .glass-card:nth-child(n + 5) { animation-delay: 0.16s; }
+
+@keyframes shimmer {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(220%); }
+}
+.progress-fill {
+  position: relative;
+  overflow: hidden;
+}
+.progress-fill.is-running::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.45), transparent);
+  animation: shimmer 1.35s ease-in-out infinite;
 }
 
 /* ---------- toast 动画 ---------- */

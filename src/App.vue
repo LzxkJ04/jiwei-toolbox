@@ -93,8 +93,8 @@ onMounted(async () => {
     <TitleBar />
     <div class="flex min-h-0 flex-1">
       <SideNav />
-      <main class="min-w-0 flex-1 overflow-y-auto">
-        <div :key="route.active" class="page-enter mx-auto max-w-6xl px-6 pb-8 pt-5">
+      <main class="app-main">
+        <div :key="route.active" class="page-enter page-frame">
           <component :is="activeView" />
         </div>
       </main>
