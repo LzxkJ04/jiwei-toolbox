@@ -114,6 +114,32 @@ pub fn set_autostart(enable: bool) -> Result<(), String> {
     }
 }
 
+/// 弹出系统文件选择框，返回所选文件路径；取消返回空字符串。
+/// 导入配置用它，避免依赖 WebView2 里不可靠的 window.prompt。
+#[tauri::command]
+pub async fn choose_file(title: String, filter_name: String, filter_ext: String) -> String {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dlg = rfd::FileDialog::new();
+        if !title.trim().is_empty() {
+            dlg = dlg.set_title(&title);
+        }
+        let exts: Vec<&str> = filter_ext
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !exts.is_empty() {
+            let name = if filter_name.trim().is_empty() { "文件" } else { filter_name.trim() };
+            dlg = dlg.add_filter(name, &exts);
+        }
+        dlg.pick_file()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 // ---------- 设置存储（config\settings.json，UTF-8 无 BOM） ----------
 
 fn settings_file() -> PathBuf {

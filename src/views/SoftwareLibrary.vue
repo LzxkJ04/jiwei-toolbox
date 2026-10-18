@@ -22,6 +22,14 @@ const tasks = useTasksStore();
 const search = ref("");
 const filter = ref("all");
 const category = ref("全部");
+/** 排序：默认 / 体积 / 名称 */
+const sortBy = ref("default");
+const sortOptions = [
+  { value: "default", label: "默认顺序" },
+  { value: "size", label: "体积小到大" },
+  { value: "size-desc", label: "体积大到小" },
+  { value: "name", label: "按名称" },
+];
 /** 勾选状态存于 software store（备份页加载清单可跨页联动） */
 const checked = computed(() => store.checked);
 const detailItem = ref<SoftwareItem | null>(null);
@@ -47,8 +55,25 @@ const visible = computed(() => {
   if (filter.value === "not-installed") list = list.filter((i) => store.statusOf(i) !== "installed");
   else if (filter.value === "fav") list = list.filter((i) => favorites.isFavorite(i.id));
   else if (filter.value === "open-free") list = list.filter((i) => store.licenseOf(i) !== "commercial");
+
+  if (sortBy.value === "size") return list.slice().sort((a, b) => (a.size_mb || 0) - (b.size_mb || 0));
+  if (sortBy.value === "size-desc") return list.slice().sort((a, b) => (b.size_mb || 0) - (a.size_mb || 0));
+  if (sortBy.value === "name") return list.slice().sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
   return list;
 });
+
+/** 每个分类的数量，显示在标签上 */
+const categoryCount = computed(() => {
+  const map = new Map<string, number>();
+  for (const i of store.items ?? []) {
+    map.set(i.category || "其他", (map.get(i.category || "其他") ?? 0) + 1);
+  }
+  map.set("全部", (store.items ?? []).length);
+  return map;
+});
+
+/** 当前筛选结果的总体积估算 */
+const visibleSize = computed(() => visible.value.reduce((s, i) => s + (i.size_mb || 0), 0));
 
 function setChecked(item: SoftwareItem, v: boolean) {
   store.setChecked(item.id, v);
@@ -135,10 +160,11 @@ function importList(e: Event) {
         <ListFilter class="h-4 w-4 text-[var(--muted)]" />
         <Select v-model="filter" :options="filterOptions" class="w-36" />
       </div>
+      <Select v-model="sortBy" :options="sortOptions" class="w-36" />
     </div>
 
     <!-- 分类标签栏（横向滚动） -->
-    <div class="no-scrollbar mb-4 flex gap-2 overflow-x-auto pb-1">
+    <div class="no-scrollbar mb-2 flex gap-2 overflow-x-auto pb-1">
       <button
         v-for="c in CATEGORIES"
         :key="c"
@@ -147,8 +173,12 @@ function importList(e: Event) {
         @click="category = c"
       >
         {{ c }}
+        <span v-if="categoryCount.get(c)" class="ml-1 opacity-60">{{ categoryCount.get(c) }}</span>
       </button>
     </div>
+    <p class="mb-4 text-xs text-[var(--muted)]">
+      {{ visible.length }} 个软件<template v-if="visibleSize > 0"> · 安装包合计约 {{ visibleSize }} MB</template>
+    </p>
 
     <!-- 软件卡片网格 -->
     <div v-if="store.items === null" class="glass-card">

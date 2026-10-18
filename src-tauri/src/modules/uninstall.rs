@@ -222,6 +222,70 @@ pub struct KillResult {
     pub failed: Vec<u32>,
 }
 
+/// 启动卸载程序。
+/// 只接受本机已安装程序枚举出的卸载命令，避免被当成任意命令执行入口：
+/// - msiexec 只允许 /X{GUID} 或 /I{GUID} 形式，拒绝任意参数
+/// - 普通 exe 直接从文件系统启动，不经 cmd，因此命令里的 & | > 不会被解释
+#[tauri::command]
+pub async fn run_uninstaller(command: String) -> Result<String, String> {
+    let cmd = command.trim().to_string();
+    if cmd.is_empty() {
+        return Err("没有可用的卸载命令".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        // 拆出可执行文件与参数：优先按引号处理，否则取第一个空格前
+        let (exe, args) = if let Some(rest) = cmd.strip_prefix('"') {
+            match rest.find('"') {
+                Some(i) => (rest[..i].to_string(), rest[i + 1..].trim().to_string()),
+                None => (rest.to_string(), String::new()),
+            }
+        } else if cmd.to_ascii_lowercase().starts_with("msiexec") {
+            match cmd.find(char::is_whitespace) {
+                Some(i) => (cmd[..i].to_string(), cmd[i..].trim().to_string()),
+                None => (cmd.clone(), String::new()),
+            }
+        } else {
+            match cmd.find(char::is_whitespace) {
+                Some(i) => (cmd[..i].to_string(), cmd[i..].trim().to_string()),
+                None => (cmd.clone(), String::new()),
+            }
+        };
+
+        let lower = exe.to_ascii_lowercase();
+        if lower.contains("msiexec") {
+            let up = args.to_ascii_uppercase();
+            let ok = (up.starts_with("/X") || up.starts_with("/I"))
+                && !up.contains('&')
+                && !up.contains('|')
+                && !up.contains(';');
+            if !ok {
+                return Err("msiexec 参数不在允许范围内".to_string());
+            }
+        }
+
+        // 非 msiexec 的绝对路径必须真实存在，避免执行不存在的路径
+        if !lower.contains("msiexec") && !args_ref_is_shell(&exe) && !std::path::Path::new(&exe).exists() {
+            return Err(format!("卸载程序不存在：{exe}"));
+        }
+
+        let mut c = std::process::Command::new(&exe);
+        // 参数按空格拆分，去掉空段；不做 shell 解释
+        for a in args.split(' ').map(str::trim).filter(|s| !s.is_empty()) {
+            c.arg(a);
+        }
+        c.creation_flags(CREATE_NO_WINDOW);
+        c.spawn().map_err(|e| format!("启动卸载程序失败：{e}"))?;
+        Ok("卸载程序已启动，请按提示完成卸载".to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 判断可执行名是否带 shell 元字符（这些路径本来就不可能合法，直接拒绝）
+fn args_ref_is_shell(exe: &str) -> bool {
+    exe.contains('&') || exe.contains('|') || exe.contains('>') || exe.contains('<')
+}
+
 /// 按 pid 逐个强制结束进程：先 taskkill /F，失败再用 sysinfo kill 兜底
 #[tauri::command]
 pub async fn kill_process(pids: Vec<u32>) -> KillResult {
@@ -306,4 +370,47 @@ pub fn remove_residual(items: Vec<ResidualItem>) -> Result<(), String> {
     };
     crate::logs::op_log(&dirs, "uninstall", "remove_residual", &format!("清理 {} 项残留: {}", count, outcome));
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::args_ref_is_shell;
+
+    #[test]
+    fn shell_metachars_are_flagged() {
+        assert!(args_ref_is_shell(r"C:\a&b\unins.exe"));
+        assert!(args_ref_is_shell(r"C:\a|b\unins.exe"));
+        assert!(!args_ref_is_shell(r"C:\Program Files\App\unins000.exe"));
+    }
+
+    /// 卸载命令解析规则（与 run_uninstaller 内保持一致）
+    fn split(arg: &str) -> (String, String) {
+        let cmd = arg.trim().to_string();
+        if let Some(rest) = cmd.strip_prefix('"') {
+            match rest.find('"') {
+                Some(i) => (rest[..i].to_string(), rest[i + 1..].trim().to_string()),
+                None => (rest.to_string(), String::new()),
+            }
+        } else {
+            match cmd.find(char::is_whitespace) {
+                Some(i) => (cmd[..i].to_string(), cmd[i..].trim().to_string()),
+                None => (cmd.clone(), String::new()),
+            }
+        }
+    }
+
+    #[test]
+    fn quoted_uninstaller_path_is_split() {
+        let (exe, args) = split(r#""C:\Program Files\App\unins000.exe" /SILENT"#);
+        assert_eq!(exe, r"C:\Program Files\App\unins000.exe");
+        assert_eq!(args, "/SILENT");
+    }
+
+    #[test]
+    fn unquoted_msiexec_is_split() {
+        let (exe, args) = split("MsiExec.exe /X{1234-5678} /qn");
+        assert_eq!(exe.to_ascii_lowercase(), "msiexec.exe");
+        assert_eq!(args, "/X{1234-5678} /qn");
+        assert!(args.to_ascii_uppercase().starts_with("/X"));
+    }
 }

@@ -196,6 +196,7 @@ pub fn run() {
             common::set_close_to_tray,
             common::get_autostart,
             common::set_autostart,
+            common::choose_file,
             common::get_favorites,
             common::toggle_favorite,
             // 许可证状态（只读）
@@ -311,6 +312,7 @@ pub fn run() {
             // 进程检测与关闭
             uninstall::process_running,
             uninstall::kill_process,
+            uninstall::run_uninstaller,
             inventory::save_inventory,
             inventory::list_inventories,
             inventory::load_inventory,

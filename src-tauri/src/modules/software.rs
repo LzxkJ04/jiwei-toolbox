@@ -836,7 +836,6 @@ mod e2e_download_tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::atomic::AtomicUsize;
-    use std::sync::Arc;
     use std::sync::Mutex;
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());

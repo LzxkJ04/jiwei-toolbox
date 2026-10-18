@@ -86,14 +86,16 @@ function addToQueue() {
   toast(n > 0 ? "已加入任务队列" : "该软件已在任务队列中", n > 0 ? "success" : "info");
 }
 
-// TODO(后端化): 后端提供 open_path / 启动进程命令后，改为直接以 install_location 启动软件
+/** 打开安装目录；后端 open_path 已注册，失败时降级提示走开始菜单 */
 async function openSoftware() {
   const loc = (installedApp.value as Record<string, unknown> | null)?.install_location as string | undefined;
   if (loc) {
-    const ok = await openPath(loc);
-    if (ok !== null) {
+    try {
+      await openPath(loc);
       toast("已在资源管理器中打开安装目录", "success");
       return;
+    } catch {
+      /* 落到下面的兜底提示 */
     }
   }
   toast("未找到安装目录，请通过开始菜单或桌面快捷方式打开该软件", "warning");

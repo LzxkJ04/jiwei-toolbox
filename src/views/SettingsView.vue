@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { Download, Globe, RefreshCw, Upload } from "lucide-vue-next";
+import { Download, FolderOpen, Globe, RefreshCw, Upload } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
 import Button from "../components/ui/Button.vue";
@@ -22,6 +22,9 @@ import {
   setCacheDir,
   instChooseDir,
   getDirs,
+  chooseFile,
+  openPath,
+  type Dirs,
 } from "../lib/tauri";
 import { formatBytes } from "../lib/utils";
 import { toast } from "../lib/toast";
@@ -124,6 +127,29 @@ async function persistSetting(key: string, value: string, msg?: string) {
 
 const cacheDir = ref("");
 const changingCache = ref(false);
+const dirsInfo = ref<Dirs | null>(null);
+
+/** 数据目录一览：程序本体用户改不了，其余三项可定位 */
+const DIR_ROWS = [
+  { key: "program", label: "程序目录", hint: "本体所在位置" },
+  { key: "config", label: "配置目录", hint: "settings.json 等" },
+  { key: "backup", label: "备份导出", hint: "软件清单与配置备份" },
+  { key: "cache", label: "缓存目录", hint: "下载临时文件与图标" },
+  { key: "log", label: "日志目录", hint: "运行与操作日志" },
+] as const;
+
+async function openDir(key: string) {
+  const p = (dirsInfo.value as unknown as Record<string, string> | null)?.[key];
+  if (!p) {
+    toast("目录信息尚未读取", "info");
+    return;
+  }
+  try {
+    await openPath(p);
+  } catch (err) {
+    toast(String(err), "error");
+  }
+}
 
 async function changeCacheDir() {
   const d = await instChooseDir();
@@ -141,7 +167,10 @@ async function changeCacheDir() {
 
 onMounted(async () => {
   const dirs = await getDirs();
-  if (dirs) cacheDir.value = (dirs as unknown as Record<string, string>).cache || "";
+  if (dirs) {
+    dirsInfo.value = dirs;
+    cacheDir.value = (dirs as unknown as Record<string, string>).cache || "";
+  }
   void getAutostart().then((v) => (autostart.value = v ?? false));
   void cacheStats().then((s) => (stats.value = s));
 
@@ -249,7 +278,8 @@ async function doExport() {
 }
 
 async function doImport() {
-  const file = window.prompt("输入要导入的配置文件路径：");
+  // WebView2 里 window.prompt 常被禁用，改用系统文件选择框
+  const file = await chooseFile("选择要导入的配置文件", "配置文件", "json");
   if (!file) return;
   const ok = await importConfig(file);
   if (ok !== null) toast("配置导入成功，部分设置可能需重启应用生效", "success");
@@ -503,6 +533,37 @@ async function doReset() {  theme.setMode("dark");
             <span class="text-[var(--muted)]">:</span>
             <Input v-model="proxyPort" placeholder="端口" class="max-w-[100px]" />
             <Button variant="gray" size="sm" @click="saveProxy">保存</Button>
+          </div>
+        </div>
+      </Card>
+
+      <!-- ===== 数据目录 ===== -->
+      <Card class="p-5 lg:col-span-2">
+        <h4 class="mb-1 font-semibold">数据目录</h4>
+        <p class="mb-3 text-xs text-[var(--muted)]">本体、配置、备份、缓存与日志各自独立，切换缓存目录不会搬动已有文件</p>
+        <div class="space-y-1">
+          <div
+            v-for="row in DIR_ROWS"
+            :key="row.key"
+            class="flex flex-wrap items-center gap-2 border-b border-[var(--card-border)] py-2 last:border-0"
+          >
+            <span class="w-20 shrink-0 text-xs text-[var(--muted)]">{{ row.label }}</span>
+            <span
+              class="min-w-0 flex-1 truncate font-mono text-xs text-[var(--text)]"
+              :title="(dirsInfo as unknown as Record<string, string>)?.[row.key] || '读取中…'"
+            >
+              {{ (dirsInfo as unknown as Record<string, string>)?.[row.key] || "读取中…" }}
+            </span>
+            <span class="hidden shrink-0 text-[10px] text-[var(--muted)] sm:inline">{{ row.hint }}</span>
+            <Button
+              variant="gray"
+              size="sm"
+              :disabled="!dirsInfo"
+              title="在资源管理器中打开"
+              @click="openDir(row.key)"
+            >
+              <FolderOpen class="h-3 w-3" />
+            </Button>
           </div>
         </div>
       </Card>

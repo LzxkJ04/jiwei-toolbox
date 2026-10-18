@@ -15,7 +15,7 @@ import Spinner from "../components/ui/Spinner.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import type { InstalledApp, ResidualItem, UwpApp } from "../lib/tauri";
 import {
-  listInstalled, listUwp, openPath, removeResidual, removeUwp, scanResidual,
+  listInstalled, listUwp, openPath, removeResidual, removeUwp, runUninstaller, scanResidual,
   processRunning, killProcess,
 } from "../lib/tauri";
 import { copyText, formatBytes } from "../lib/utils";
@@ -265,6 +265,24 @@ function scanAfterStd() {
   const app = stdApp.value;
   stdApp.value = null;
   if (app) startForcedUninstall(app);
+}
+
+const runningUninstaller = ref(false);
+
+/** 直接启动卸载程序（后端只允许 msiexec /X 或已存在的 exe 路径） */
+async function runStdUninstaller() {
+  const app = stdApp.value;
+  if (!app?.uninstaller || runningUninstaller.value) return;
+  runningUninstaller.value = true;
+  try {
+    const msg = await runUninstaller(app.uninstaller);
+    toast(msg, "success");
+    stdApp.value = null;
+  } catch (err) {
+    toast(`启动失败：${String(err)}`, "error");
+  } finally {
+    runningUninstaller.value = false;
+  }
 }
 
 /* ============ 强制卸载：进程检测 → 残留扫描 → 预览 → 清理 ============ */
@@ -642,7 +660,7 @@ function clearQueue() {
     <Dialog :open="!!stdApp" title="标准卸载" class="!max-w-lg" @update:open="stdApp = null">
       <div v-if="stdApp">
         <p class="mb-3 rounded-xl bg-[#f5a6231a] p-3 text-xs leading-relaxed text-[#b57d10]">
-          卸载前请确保软件已关闭。当前版本暂未接入自动运行卸载器的能力，请复制下方卸载命令手动执行（可在「运行」Win+R 或终端中粘贴运行）。
+          卸载前请确保软件已关闭。点下方按钮直接运行卸载程序，或复制命令自行执行（Win+R 粘贴）。
           卸载完成后可点击「扫描残留」自动清理剩余文件与注册表项。
         </p>
         <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3">
@@ -658,9 +676,18 @@ function clearQueue() {
         </div>
       </div>
       <template #footer>
-        <div class="flex justify-end gap-3">
+        <div class="flex flex-wrap justify-end gap-3">
           <Button variant="gray" @click="stdApp = null">关闭</Button>
-          <Button variant="primary" @click="scanAfterStd">
+          <Button
+            variant="primary"
+            :disabled="!stdApp?.uninstaller || runningUninstaller"
+            @click="runStdUninstaller"
+          >
+            <Loader2 v-if="runningUninstaller" class="h-4 w-4 animate-spin" />
+            <PlayCircle v-else class="h-4 w-4" />
+            运行卸载程序
+          </Button>
+          <Button variant="gray" @click="scanAfterStd">
             <Zap class="h-4 w-4" />
             扫描残留
           </Button>

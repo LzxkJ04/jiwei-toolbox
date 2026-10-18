@@ -107,9 +107,10 @@ pub fn list_inventories() -> Vec<InventoryMeta> {
                 continue;
             }
             let fname = p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-            let Some(stem) = fname.strip_suffix(".jwinv.json") else {
+            // 只认 .jwinv.json 后缀；stem 本身不参与后续逻辑
+            if fname.strip_suffix(".jwinv.json").is_none() {
                 continue;
-            };
+            }
             let Ok(text) = std::fs::read_to_string(&p) else {
                 continue;
             };

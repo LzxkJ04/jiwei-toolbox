@@ -484,6 +484,8 @@ export function onTrayNotify(handler: (msg: string) => void): Promise<UnlistenFn
 export const listInstalled = () => tryCall<InstalledApp[]>("list_installed");
 export const scanResidual = (name: string) => tryCall<ResidualItem[]>("scan_residual", { name });
 export const removeResidual = (items: ResidualItem[]) => tryCall<null>("remove_residual", { items });
+/** 启动枚举出来的卸载程序；只接受 msiexec /X 或已存在的 exe 路径 */
+export const runUninstaller = (command: string) => invoke<string>("run_uninstaller", { command });
 /** 按名称匹配正在运行的进程，返回 PID 列表（无匹配为空数组；调用失败返回 null，视为"未知"） */
 export const processRunning = (name: string) => tryCall<number[]>("process_running", { name });
 /** 结束指定进程，返回成功/失败 PID 分组 */
@@ -666,6 +668,9 @@ export async function getLaunchMode(): Promise<
 // —— 安装器
 /** 打开系统目录选择对话框，返回所选目录（取消返回空串/null） */
 export const instChooseDir = () => tryCall<string>("inst_choose_dir");
+/** 系统文件选择框；取消返回空字符串 */
+export const chooseFile = (title: string, filterName = "", filterExt = "") =>
+  invoke<string>("choose_file", { title, filterName, filterExt }).catch(() => "");
 /** 查询路径所在盘剩余空间（字节；失败 0=未知） */
 export const instDiskFree = (path: string) => tryCall<number>("inst_disk_free", { path });
 /** 开始安装：WebView2 预装（按需）+ 拷贝程序文件 + 创建数据目录 + 静默安装逻辑包 */
