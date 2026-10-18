@@ -103,6 +103,7 @@ pub fn take_by_name(name: &str) -> Option<StartupBackup> {
 }
 
 /// 把 "HKCU\Software\...\Run" 这类定位串映射成来源标识。
+#[allow(dead_code)]
 pub fn source_of_location(location: &str) -> &'static str {
     let l = location.to_ascii_lowercase();
     if l.contains("wow6432node") {

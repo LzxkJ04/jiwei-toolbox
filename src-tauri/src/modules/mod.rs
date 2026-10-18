@@ -19,6 +19,7 @@ pub mod systools;
 pub mod sysmon;
 pub mod sysquick;
 pub mod taskopts;
+pub mod templates;
 pub mod uninstall;
 pub mod updater;
 pub mod webview2;

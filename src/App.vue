@@ -18,9 +18,11 @@ import InstallerView from "./views/InstallerView.vue";
 import UninstallerView from "./views/UninstallerView.vue";
 import RepairView from "./views/RepairView.vue";
 import SoftwareLibrary from "./views/SoftwareLibrary.vue";
+import WorkbenchView from "./views/WorkbenchView.vue";
 import FavoritesView from "./views/FavoritesView.vue";
 import LocalSoftware from "./views/LocalSoftware.vue";
 import TaskQueue from "./views/TaskQueue.vue";
+import TemplatesView from "./views/TemplatesView.vue";
 import BackupView from "./views/BackupView.vue";
 import HardwareView from "./views/HardwareView.vue";
 import SysMonitorView from "./views/SysMonitorView.vue";
@@ -38,10 +40,12 @@ const route = useRouteStore();
 const launchMode = ref<"main" | "installer" | "uninstaller" | "repair" | "unattended">("main");
 
 const views: Record<string, unknown> = {
+  workbench: WorkbenchView,
   library: SoftwareLibrary,
   favorites: FavoritesView,
   local: LocalSoftware,
   tasks: TaskQueue,
+  templates: TemplatesView,
   backup: BackupView,
   hardware: HardwareView,
   monitor: SysMonitorView,

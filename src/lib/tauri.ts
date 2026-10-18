@@ -630,6 +630,55 @@ export interface ProxyTest {
 
 export const testProxy = () => invoke<ProxyTest>("test_proxy");
 
+/* ---- 批量任务模板 ---- */
+
+export interface TemplateItem {
+  id: string;
+  name: string;
+  silent_args: string;
+  install_dir: string;
+  /** 保留在模板里但不安装 */
+  disabled: boolean;
+}
+
+export interface TemplateOptions {
+  auto_install: boolean;
+  /** "stop" | "skip" */
+  fail_policy: string;
+  auto_shutdown: boolean;
+  /** "add" 只入队 | "start" 直接开始 */
+  load_action: string;
+}
+
+export interface TaskTemplate {
+  name: string;
+  description: string;
+  tags: string[];
+  items: TemplateItem[];
+  options: TemplateOptions;
+  created: string;
+  updated: string;
+}
+
+export interface TemplateMeta {
+  name: string;
+  description: string;
+  tags: string[];
+  count: number;
+  enabled_count: number;
+  created: string;
+  updated: string;
+}
+
+export const listTemplates = () => tryCall<TemplateMeta[]>("list_templates");
+export const loadTemplate = (name: string) => invoke<TaskTemplate>("load_template", { name });
+export const saveTemplate = (template: TaskTemplate, renameFrom?: string) =>
+  invoke<string>("save_template", { template, renameFrom: renameFrom ?? null });
+export const deleteTemplate = (name: string) => invoke<null>("delete_template", { name });
+export const duplicateTemplate = (name: string) => invoke<string>("duplicate_template", { name });
+export const exportTemplateMarkdown = (name: string) =>
+  invoke<string>("export_template_markdown", { name });
+
 
 
 export const cpuBurnStart = (seconds: number) => tryCall<null>("cpu_burn_start", { seconds });

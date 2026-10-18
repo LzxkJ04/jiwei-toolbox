@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import {
-  Activity, Archive, BadgeCheck, Database, FileText, Gauge, HardDrive, LayoutGrid,
-  ListChecks, Settings, Star, Wrench, Zap, type LucideIcon,
+  Activity, Archive, BadgeCheck, Database, FileText, Gauge, HardDrive, LayoutDashboard,
+  LayoutGrid, LayoutTemplate, ListChecks, Settings, Star, Wrench, Zap, type LucideIcon,
 } from "lucide-vue-next";
 
 export interface NavItem {
@@ -11,10 +11,12 @@ export interface NavItem {
 }
 
 export type PageId =
+  | "workbench"
   | "library"
   | "favorites"
   | "local"
   | "tasks"
+  | "templates"
   | "backup"
   | "hardware"
   | "monitor"
@@ -26,10 +28,12 @@ export type PageId =
   | "settings";
 
 export const NAV_ITEMS: NavItem[] = [
+  { id: "workbench", label: "快速工作台", icon: LayoutDashboard },
   { id: "library", label: "软件库", icon: LayoutGrid },
   { id: "favorites", label: "我的收藏", icon: Star },
   { id: "local", label: "本机软件", icon: HardDrive },
   { id: "tasks", label: "任务队列", icon: ListChecks },
+  { id: "templates", label: "任务模板", icon: LayoutTemplate },
   { id: "backup", label: "软件备份", icon: Archive },
   { id: "hardware", label: "硬件检测", icon: Gauge },
   { id: "monitor", label: "系统监控", icon: Activity },
@@ -43,7 +47,7 @@ export const NAV_ITEMS: NavItem[] = [
 
 export const useRouteStore = defineStore("route", {
   state: () => ({
-    active: "library" as PageId,
+    active: "workbench" as PageId,
     collapsed: false,
   }),
   actions: {

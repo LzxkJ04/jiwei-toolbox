@@ -42,7 +42,11 @@ pub fn proxy_config() -> ProxyConfig {
         return ProxyConfig::System;
     }
     if !host.is_empty() && !port.is_empty() {
-        return ProxyConfig::Manual(normalize_proxy_url(&host, &port));
+        // 端口非法时不构造代理，避免生成 http://h:abc 这种无效 URL
+        return match validate_port(&port) {
+            Ok(p) => ProxyConfig::Manual(normalize_proxy_url(&host, &p.to_string())),
+            Err(_) => ProxyConfig::None,
+        };
     }
     ProxyConfig::None
 }
