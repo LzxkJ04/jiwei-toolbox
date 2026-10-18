@@ -4,6 +4,7 @@ import { Download, FolderOpen, RefreshCw, Trash2 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
 import Button from "../components/ui/Button.vue";
+import Input from "../components/ui/Input.vue";
 import Select from "../components/ui/Select.vue";
 import Switch from "../components/ui/Switch.vue";
 import Spinner from "../components/ui/Spinner.vue";
@@ -48,6 +49,7 @@ const file = ref("");
 const raw = ref("");
 const fileLoading = ref(false);
 const typeFilter = ref<LogType>("all");
+const keyword = ref("");
 const limit = ref(500);
 const live = ref(false);
 const boxRef = ref<HTMLElement | null>(null);
@@ -56,11 +58,37 @@ let liveTimer: number | null = null;
 
 const allLines = computed(() => raw.value.split(/\r?\n/).filter((l) => l.trim() !== ""));
 const filteredLines = computed(() => {
-  if (typeFilter.value === "all") return allLines.value;
-  const re = TYPE_MATCHER[typeFilter.value];
-  return allLines.value.filter((l) => re.test(l));
+  let lines = allLines.value;
+  if (typeFilter.value !== "all") {
+    const re = TYPE_MATCHER[typeFilter.value];
+    lines = lines.filter((l) => re.test(l));
+  }
+  const kw = keyword.value.trim().toLowerCase();
+  if (kw) lines = lines.filter((l) => l.toLowerCase().includes(kw));
+  return lines;
 });
 const shownLines = computed(() => filteredLines.value.slice(0, limit.value));
+
+/** 按级别统计当前筛选结果，便于一眼看出有没有报错 */
+const stats = computed(() => {
+  const s = { error: 0, warn: 0, ok: 0, other: 0 };
+  for (const l of filteredLines.value) {
+    const cls = lineClass(l);
+    if (cls.includes("e5484d")) s.error += 1;
+    else if (cls.includes("f59e0b")) s.warn += 1;
+    else if (cls.includes("30a46c")) s.ok += 1;
+    else s.other += 1;
+  }
+  return s;
+});
+
+/** 只看某一级别的日志 */
+const levelFilter = ref<"all" | "error" | "warn">("all");
+const levelLines = computed(() => {
+  if (levelFilter.value === "all") return shownLines.value;
+  const want = levelFilter.value === "error" ? "e5484d" : "f59e0b";
+  return shownLines.value.filter((l) => lineClass(l).includes(want));
+});
 
 async function loadFiles() {
   const list = await listLogs();
@@ -178,10 +206,43 @@ onBeforeUnmount(() => setLive(false));
           @update:model-value="(v) => { typeFilter = v as LogType; limit = 500; }"
         />
       </div>
+      <div class="flex min-w-[180px] flex-1 items-center gap-2">
+        <span class="shrink-0 text-xs text-[var(--muted)]">搜索</span>
+        <Input v-model="keyword" placeholder="按关键词过滤日志行" class="flex-1" />
+      </div>
       <label class="flex cursor-pointer items-center gap-2 text-xs text-[var(--muted)]">
         <Switch :checked="live" @update:checked="setLive" />
         实时滚动
       </label>
+    </div>
+
+    <!-- 级别统计与快捷筛选 -->
+    <div v-if="allLines.length > 0" class="mb-3 flex flex-wrap items-center gap-2 text-xs">
+      <button
+        type="button"
+        class="rounded-full px-2.5 py-1 font-medium transition-colors"
+        :class="levelFilter === 'all' ? 'bg-[var(--primary)] text-white' : 'bg-[var(--btn-gray)] text-[var(--muted)] hover:text-[var(--text)]'"
+        @click="levelFilter = 'all'"
+      >
+        全部 {{ filteredLines.length }}
+      </button>
+      <button
+        type="button"
+        class="rounded-full px-2.5 py-1 font-medium transition-colors"
+        :class="levelFilter === 'error' ? 'bg-[#e5484d] text-white' : 'bg-[#e5484d]/12 text-[#e5484d] hover:bg-[#e5484d]/20'"
+        @click="levelFilter = 'error'"
+      >
+        错误 {{ stats.error }}
+      </button>
+      <button
+        type="button"
+        class="rounded-full px-2.5 py-1 font-medium transition-colors"
+        :class="levelFilter === 'warn' ? 'bg-[#f59e0b] text-white' : 'bg-[#f59e0b]/12 text-[#f59e0b] hover:bg-[#f59e0b]/20'"
+        @click="levelFilter = 'warn'"
+      >
+        警告 {{ stats.warn }}
+      </button>
+      <span class="ml-1 text-[var(--muted)]">成功 {{ stats.ok }} · 其他 {{ stats.other }}</span>
     </div>
 
     <!-- 日志内容区 -->
@@ -198,7 +259,10 @@ onBeforeUnmount(() => setLive(false));
           class="max-h-[60vh] overflow-y-auto rounded-2xl bg-[var(--card-soft)] p-4 font-mono text-xs leading-relaxed"
         >
           <div v-if="fileLoading" class="py-2 text-center text-[var(--muted)]">加载中…</div>
-          <div v-for="(line, i) in shownLines" :key="i" class="whitespace-pre-wrap break-all" :class="lineClass(line)">
+          <div v-if="levelLines.length === 0 && !fileLoading" class="py-2 text-center text-[var(--muted)]">
+            当前筛选下没有日志行
+          </div>
+          <div v-for="(line, i) in levelLines" :key="i" class="whitespace-pre-wrap break-all" :class="lineClass(line)">
             {{ line }}
           </div>
           <div v-if="filteredLines.length > limit" class="py-3 text-center">
@@ -212,7 +276,7 @@ onBeforeUnmount(() => setLive(false));
 
     <!-- 底部操作栏 -->
     <div class="mt-3 flex flex-wrap items-center gap-3 px-1 text-xs text-[var(--muted)]">
-      <span>共 {{ allLines.length }} 行 · 筛选后 {{ filteredLines.length }} 行 · 显示 {{ shownLines.length }} 行</span>
+      <span>共 {{ allLines.length }} 行 · 筛选后 {{ filteredLines.length }} 行 · 显示 {{ levelLines.length }} 行</span>
       <div class="ml-auto flex items-center gap-2">
         <Button variant="gray" size="sm" @click="openLogDir">
           <FolderOpen class="h-3.5 w-3.5" /> 打开日志目录

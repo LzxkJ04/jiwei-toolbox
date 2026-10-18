@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import {
-  CheckCircle2, Copy, Database, ExternalLink, FolderOpen, Loader2, ListChecks,
-  PlayCircle, RefreshCw, Search, Trash2, XCircle, Zap,
+  ArrowDownWideNarrow, CheckCircle2, Copy, Database, Download, ExternalLink, FolderOpen,
+  Loader2, ListChecks, PlayCircle, RefreshCw, Search, Trash2, XCircle, Zap,
 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Button from "../components/ui/Button.vue";
@@ -15,7 +15,7 @@ import Spinner from "../components/ui/Spinner.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import type { InstalledApp, ResidualItem, UwpApp } from "../lib/tauri";
 import {
-  listInstalled, listUwp, removeResidual, removeUwp, scanResidual,
+  listInstalled, listUwp, openPath, removeResidual, removeUwp, scanResidual,
   processRunning, killProcess,
 } from "../lib/tauri";
 import { copyText, formatBytes } from "../lib/utils";
@@ -72,6 +72,26 @@ function estimateInstallDir(app: InstalledApp): string {
 const showDesktop = computed(() => filter.value !== "uwp");
 const showUwp = computed(() => filter.value === "all" || filter.value === "uwp");
 
+/** 排序方式：名称 / 体积 / 发行商 */
+const sortBy = ref("name");
+const sortOptions = [
+  { value: "name", label: "按名称" },
+  { value: "size", label: "按体积" },
+  { value: "publisher", label: "按发行商" },
+];
+
+function sortList<T>(list: T[], key: (item: T) => string | number): T[] {
+  const arr = list.slice();
+  const dir = sortBy.value === "name" ? 1 : -1;
+  arr.sort((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    if (typeof ka === "number" && typeof kb === "number") return (ka - kb) * dir;
+    return String(ka).localeCompare(String(kb), "zh-CN") * dir;
+  });
+  return arr;
+}
+
 const visibleApps = computed(() => {
   let list = apps.value ?? [];
   if (filter.value === "silent") list = list.filter(isSilentCapable);
@@ -81,7 +101,9 @@ const visibleApps = computed(() => {
       `${a.name} ${a.publisher}`.toLowerCase().includes(q)
     );
   }
-  return list;
+  if (sortBy.value === "size") return sortList(list, (a) => a.size_estimate || 0);
+  if (sortBy.value === "publisher") return sortList(list, (a) => a.publisher || "");
+  return sortList(list, (a) => a.name || "");
 });
 
 const visibleUwp = computed(() => {
@@ -89,22 +111,84 @@ const visibleUwp = computed(() => {
   let list = uwpApps.value ?? [];
   const q = search.value.trim().toLowerCase();
   if (q) list = list.filter((a) => a.name.toLowerCase().includes(q));
-  return list;
+  return sortList(list, (a) => a.name);
 });
 
 const loading = computed(() => apps.value === null && refreshing.value);
 
+/** 已安装软件占用汇总 */
+const totalSize = computed(() =>
+  (apps.value ?? []).reduce((s, a) => s + (a.size_estimate || 0), 0)
+);
+const silentCount = computed(() => (apps.value ?? []).filter(isSilentCapable).length);
+
+/* ============ 导出 / 复制清单 ============ */
+
+function csvCell(v: string | number | undefined) {
+  const s = String(v ?? "");
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** 导出为 CSV（Excel 可直接打开，带 BOM 免得中文乱码） */
+function exportCsv() {
+  const rows = visibleApps.value;
+  if (rows.length === 0) {
+    toast("当前没有可导出的软件", "info");
+    return;
+  }
+  const header = ["名称", "版本", "发行商", "卸载命令", "注册表键", "估算体积(MB)", "安装目录"];
+  const lines = [header.join(",")];
+  for (const a of rows) {
+    lines.push(
+      [
+        csvCell(a.name),
+        csvCell(a.version),
+        csvCell(a.publisher),
+        csvCell(a.uninstaller),
+        csvCell(a.key),
+        csvCell(a.size_estimate),
+        csvCell((a.install_location || "").trim() || estimateInstallDir(a)),
+      ].join(",")
+    );
+  }
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `本机软件-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast(`已导出 ${rows.length} 条软件记录`, "success");
+}
+
+/** 复制纯文本清单，便于粘贴到聊天或文档 */
+async function copyList() {
+  const rows = visibleApps.value;
+  if (rows.length === 0) {
+    toast("当前没有可复制的软件", "info");
+    return;
+  }
+  const text = rows
+    .map((a) => `- ${a.name}${a.version ? ` ${a.version}` : ""}${a.publisher ? `（${a.publisher}）` : ""}`)
+    .join("\n");
+  const ok = await copyText(text);
+  toast(ok ? `已复制 ${rows.length} 条软件清单` : "复制失败", ok ? "success" : "error");
+}
+
 /* ============ 行操作：打开软件目录（降级）/ 注册表信息 ============ */
 
 async function openInstallDir(app: InstalledApp) {
-  const dir = estimateInstallDir(app);
+  // 优先用后端记录的安装位置，没有再按卸载器路径估算
+  const dir = (app.install_location || "").trim() || estimateInstallDir(app);
   if (!dir) {
     toast("无法确定安装目录（卸载器路径缺失或为 MSI）", "info");
     return;
   }
-  // TODO: 后端暂无 open_path 命令，无法直接打开资源管理器；先复制路径降级
-  const ok = await copyText(dir);
-  toast(ok ? `安装目录路径已复制：${dir}` : "复制失败", ok ? "success" : "error");
+  try {
+    await openPath(dir);
+  } catch {
+    const ok = await copyText(dir);
+    toast(ok ? `目录无法打开，路径已复制：${dir}` : "打开失败", ok ? "warning" : "error");
+  }
 }
 
 const regApp = ref<InstalledApp | null>(null);
@@ -341,7 +425,23 @@ function clearQueue() {
 
 <template>
   <div>
-    <PageHeader title="本机软件" desc="查看与管理本机已安装软件，支持残留扫描与强制卸载" />
+    <PageHeader title="本机软件" desc="查看与管理本机已安装软件，支持残留扫描与强制卸载">
+      <template #extra>
+        <Button variant="gray" size="sm" title="导出当前列表为 CSV" :disabled="visibleApps.length === 0" @click="exportCsv">
+          <Download class="h-3.5 w-3.5" /> 导出 CSV
+        </Button>
+        <Button variant="gray" size="sm" title="复制为纯文本清单" :disabled="visibleApps.length === 0" @click="copyList">
+          <Copy class="h-3.5 w-3.5" /> 复制清单
+        </Button>
+      </template>
+    </PageHeader>
+
+    <!-- 汇总 -->
+    <div class="mb-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-[var(--muted)]">
+      <span>{{ (apps ?? []).length }} 个桌面软件 · {{ (uwpApps ?? []).length }} 个 UWP</span>
+      <span>估算占用 {{ formatBytes(totalSize) }}</span>
+      <span>可静默卸载 {{ silentCount }} 个</span>
+    </div>
 
     <!-- 顶部栏：搜索 + 筛选 + 刷新 -->
     <div class="mb-4 flex flex-wrap items-center gap-3">
@@ -350,6 +450,10 @@ function clearQueue() {
         <Input v-model="search" placeholder="搜索软件名称或厂商…" class="!pl-9" />
       </div>
       <Select v-model="filter" :options="filterOptions" class="w-36" />
+      <div class="flex items-center gap-1.5">
+        <ArrowDownWideNarrow class="h-4 w-4 shrink-0 text-[var(--muted)]" />
+        <Select v-model="sortBy" :options="sortOptions" class="w-32" />
+      </div>
       <Button variant="gray" size="icon" title="刷新列表" :disabled="refreshing" @click="refresh">
         <RefreshCw class="h-4 w-4" :class="refreshing && 'animate-spin'" />
       </Button>

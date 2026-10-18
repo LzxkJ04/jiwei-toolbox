@@ -533,6 +533,26 @@ export const scheduleShutdown = (seconds: number, mode: string) =>
   invoke<null>("schedule_shutdown", { seconds, mode });
 export const cancelShutdown = () => invoke<null>("cancel_shutdown");
 
+/* ---- 系统维护 ---- */
+
+export interface PowerPlan {
+  id: string;
+  name: string;
+  active: boolean;
+}
+
+export interface UptimeInfo {
+  boot_ts: number;
+  uptime: number;
+  boot_seconds: number;
+}
+
+export const emptyRecycleBin = () => invoke<null>("empty_recycle_bin");
+export const listPowerPlans = () => tryCall<PowerPlan[]>("list_power_plans");
+export const setPowerPlan = (id: string) => invoke<null>("set_power_plan", { id });
+export const uptimeInfo = () => tryCall<UptimeInfo>("uptime_info");
+
+
 
 export const cpuBurnStart = (seconds: number) => tryCall<null>("cpu_burn_start", { seconds });
 export const cpuBurnStop = () => tryCall<null>("cpu_burn_stop");

@@ -11,6 +11,7 @@ pub mod hardware;
 pub mod inventory;
 pub mod license;
 pub mod logs;
+pub mod maintenance;
 pub mod software;
 pub mod systools;
 pub mod sysmon;

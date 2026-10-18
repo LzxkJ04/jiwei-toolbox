@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import {
-  ChevronRight, FolderOpen, HardDrive, Loader2, Search, Trash2, X,
+  ChevronRight, Eraser, FolderOpen, HardDrive, Loader2, Search, Trash2, X,
 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
@@ -12,7 +12,8 @@ import Spinner from "../components/ui/Spinner.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import ConfirmDialog from "../components/ui/ConfirmDialog.vue";
 import {
-  cancelScan, deleteSpaceItem, dirUsage, diskOverview, revealPath, scanLargeFiles,
+  cancelScan, deleteSpaceItem, dirUsage, diskOverview, emptyDirContents, emptyRecycleBin,
+  revealPath, scanLargeFiles,
   type DiskOverview, type SpaceEntry,
 } from "../lib/tauri";
 import { formatBytes } from "../lib/utils";
@@ -113,6 +114,27 @@ async function reveal(p: string) {
   }
 }
 
+/* ============ 清空目录内容 ============ */
+
+const pendingEmpty = ref<SpaceEntry | null>(null);
+const emptying = ref(false);
+
+async function confirmEmpty() {
+  const item = pendingEmpty.value;
+  pendingEmpty.value = null;
+  if (!item) return;
+  emptying.value = true;
+  try {
+    const freed = await emptyDirContents(item.path);
+    toast(`已清空 ${item.name}，释放 ${formatBytes(freed)}`, "success");
+    void openPath(currentPath.value);
+  } catch (err) {
+    toast(`清空失败：${String(err)}`, "error");
+  } finally {
+    emptying.value = false;
+  }
+}
+
 /* ============ 删除确认 ============ */
 
 const pendingDelete = ref<SpaceEntry | null>(null);
@@ -173,6 +195,25 @@ async function stopScan() {
 
 const largeTotal = computed(() => largeFiles.value.reduce((s, e) => s + e.size, 0));
 
+/* ============ 回收站 ============ */
+
+const showBin = ref(false);
+const binBusy = ref(false);
+
+async function doEmptyBin() {
+  showBin.value = false;
+  binBusy.value = true;
+  try {
+    await emptyRecycleBin();
+    toast("回收站已清空", "success");
+    await loadDisks();
+  } catch (err) {
+    toast(String(err), "error");
+  } finally {
+    binBusy.value = false;
+  }
+}
+
 /* ============ 初始化 ============ */
 
 onMounted(async () => {
@@ -190,6 +231,11 @@ onUnmounted(() => {
   <div>
     <PageHeader title="磁盘空间" desc="看哪个目录最占地方，揪出大文件，该删的直接删。">
       <template #extra>
+        <Button variant="gray" size="sm" :disabled="binBusy" @click="showBin = true">
+          <Loader2 v-if="binBusy" class="h-3.5 w-3.5 animate-spin" />
+          <Trash2 v-else class="h-3.5 w-3.5" />
+          清空回收站
+        </Button>
         <Button variant="gray" size="sm" :disabled="diskLoading" @click="loadDisks">
           <Loader2 v-if="diskLoading" class="h-3.5 w-3.5 animate-spin" />
           <HardDrive v-else class="h-3.5 w-3.5" />
@@ -310,6 +356,15 @@ onUnmounted(() => {
                 <Button variant="gray" size="sm" title="在资源管理器中显示" @click="reveal(e.path)">
                   <FolderOpen class="h-3 w-3" />
                 </Button>
+                <Button
+                  v-if="e.kind === 'dir'"
+                  variant="gray"
+                  size="sm"
+                  title="清空该目录内的所有内容（保留目录本身）"
+                  @click="pendingEmpty = e"
+                >
+                  <Eraser class="h-3 w-3" />
+                </Button>
                 <Button variant="danger" size="sm" title="删除" @click="pendingDelete = e">
                   <Trash2 class="h-3 w-3" />
                 </Button>
@@ -398,6 +453,26 @@ onUnmounted(() => {
       danger
       @update:open="(v) => !v && (pendingDelete = null)"
       @confirm="confirmDelete"
+    />
+
+    <ConfirmDialog
+      :open="showBin"
+      title="清空回收站？"
+      message="回收站里的所有文件都会被永久删除，无法恢复。清空后通常会释放一部分磁盘空间。"
+      confirm-text="清空"
+      danger
+      @update:open="showBin = $event"
+      @confirm="doEmptyBin"
+    />
+
+    <ConfirmDialog
+      :open="!!pendingEmpty"
+      title="清空这个目录？"
+      :message="pendingEmpty ? `将删除 ${pendingEmpty.name} 内的全部内容（约 ${formatBytes(pendingEmpty.size)}，${pendingEmpty.files} 个文件），目录本身保留。不进回收站，无法恢复。` : ''"
+      confirm-text="清空内容"
+      danger
+      @update:open="(v) => !v && (pendingEmpty = null)"
+      @confirm="confirmEmpty"
     />
   </div>
 </template>

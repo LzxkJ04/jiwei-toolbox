@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { Play, Pause, Square, Trash2, FileText, X, GripVertical } from "lucide-vue-next";
+import { computed, ref } from "vue";
+import {
+  Play, Pause, Square, Trash2, FileText, X, GripVertical, RotateCcw, Timer, Sparkles,
+} from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
 import Button from "../components/ui/Button.vue";
@@ -79,6 +81,46 @@ function onDragEnd() {
 function viewLog() {
   route.go("logs");
 }
+
+/** 秒 → "1 分 20 秒" / "45 秒" */
+function durText(ms: number) {
+  if (!ms || ms < 0) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  const rest = s % 60;
+  if (m < 60) return rest ? `${m} 分 ${rest} 秒` : `${m} 分`;
+  const h = Math.floor(m / 60);
+  return `${h} 小时 ${m % 60} 分`;
+}
+
+function taskElapsed(t: { _startTs?: number; _endTs?: number }) {
+  if (!t._startTs) return "";
+  return durText((t._endTs ?? Date.now()) - t._startTs);
+}
+
+/** 重试单个任务，并自动开始 */
+async function retryOne(id: string) {
+  if (!tasks.retry(id)) return;
+  toast("已重新加入队列", "info");
+  await tasks.start();
+}
+
+/** 重试全部失败任务 */
+async function retryAll() {
+  const n = tasks.retryAllFailed();
+  if (n === 0) return;
+  toast(`已重试 ${n} 个失败任务`, "info");
+  await tasks.start();
+}
+
+/** 只清掉已完成/失败的，保留进行中的 */
+function clearFinished() {
+  const n = tasks.clearFinished();
+  toast(n > 0 ? `已清理 ${n} 个结束的任务` : "没有需要清理的任务", n > 0 ? "success" : "info");
+}
+
+const finishedCount = computed(() => tasks.doneCount + tasks.failedCount);
 </script>
 
 <template>
@@ -118,6 +160,9 @@ function viewLog() {
         :tone="tasks.failedCount > 0 && !tasks.running ? 'danger' : tasks.totalProgress >= 100 ? 'success' : 'primary'"
         class="h-2.5"
       />
+      <div v-if="tasks.totalElapsed > 0" class="mt-2 flex items-center gap-1 text-xs text-[var(--muted)]">
+        <Timer class="h-3.5 w-3.5" /> 累计耗时 {{ durText(tasks.totalElapsed) }}
+      </div>
       <div class="mt-4 flex flex-wrap gap-2">
         <Button v-if="!tasks.running && !tasks.paused" variant="primary" size="sm" :disabled="tasks.pendingCount === 0" @click="tasks.start()">
           <Play class="h-4 w-4" /> 开始
@@ -127,6 +172,15 @@ function viewLog() {
         </Button>
         <Button v-else variant="primary" size="sm" @click="tasks.start()">
           <Play class="h-4 w-4" /> 继续
+        </Button>
+        <Button
+          v-if="tasks.retryableCount > 0"
+          variant="gray"
+          size="sm"
+          title="把所有失败的安装任务重新入队"
+          @click="retryAll"
+        >
+          <RotateCcw class="h-4 w-4" /> 重试失败（{{ tasks.retryableCount }}）
         </Button>
         <Button variant="danger" size="sm" :disabled="!tasks.running && !tasks.paused && tasks.pendingCount === 0" @click="showTerminate = true">
           <Square class="h-4 w-4" /> 终止全部
@@ -192,10 +246,13 @@ function viewLog() {
             :tone="t.status === 'done' ? 'success' : t.status === 'failed' ? 'danger' : t.status === 'paused' ? 'warning' : 'primary'"
           />
           <p class="mt-1 truncate text-xs text-[var(--muted)]">
-            {{ t.message }}<template v-if="t.speed"> · {{ t.speed }}</template><template v-if="t.eta"> · {{ t.eta }}</template><template v-if="t.code"> · 返回码/原因：{{ t.code }}</template>
+            {{ t.message }}<template v-if="t.speed"> · {{ t.speed }}</template><template v-if="t.eta"> · {{ t.eta }}</template><template v-if="t.code"> · 返回码/原因：{{ t.code }}</template><template v-if="taskElapsed(t)"> · 耗时 {{ taskElapsed(t) }}</template>
           </p>
         </div>
         <div class="flex shrink-0 items-center gap-1">
+          <Button v-if="t.status === 'failed'" variant="ghost" size="sm" class="text-[var(--primary)]" title="重新入队" @click="retryOne(t.id)">
+            <RotateCcw class="h-4 w-4" /> 重试
+          </Button>
           <Button variant="ghost" size="sm" @click="viewLog">
             <FileText class="h-4 w-4" /> 查看日志
           </Button>
@@ -219,9 +276,22 @@ function viewLog() {
       <span class="text-[#30a46c]">✔ 成功 {{ tasks.doneCount }}</span>
       <span class="text-[#e5484d]">✘ 失败 {{ tasks.failedCount }}</span>
       <span>⏳ 等待 {{ tasks.pendingCount }}</span>
-      <Button variant="ghost" size="sm" class="ml-auto text-[var(--muted)] hover:text-[#e5484d]" @click="showClear = true">
-        <Trash2 class="h-3.5 w-3.5" /> 清空队列
-      </Button>
+      <span v-if="tasks.totalElapsed > 0">累计耗时 {{ durText(tasks.totalElapsed) }}</span>
+      <div class="ml-auto flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          class="text-[var(--muted)]"
+          :disabled="finishedCount === 0"
+          title="只移除已完成和失败的任务"
+          @click="clearFinished"
+        >
+          <Sparkles class="h-3.5 w-3.5" /> 清理已结束
+        </Button>
+        <Button variant="ghost" size="sm" class="text-[var(--muted)] hover:text-[#e5484d]" @click="showClear = true">
+          <Trash2 class="h-3.5 w-3.5" /> 清空队列
+        </Button>
+      </div>
     </div>
 
     <!-- 终止全部：二选一 -->

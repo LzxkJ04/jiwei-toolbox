@@ -25,6 +25,9 @@ export interface QueueTask {
   eta?: string;
   /** 返回码 / 失败原因摘要 */
   code?: string;
+  /** 开始 / 结束时间戳（毫秒），用于统计耗时 */
+  _startTs?: number;
+  _endTs?: number;
   // 内部累积字段（不参与 UI 渲染）
   _lastMb?: number;
   _lastTs?: number;
@@ -87,6 +90,15 @@ export const useTasksStore = defineStore("tasks", {
     failedCount: (s) => s.tasks.filter((t) => t.status === "failed").length,
     pendingCount: (s) => s.tasks.filter((t) => t.status === "pending" || t.status === "paused").length,
     hasActive: (s) => s.tasks.some((t) => t.status === "running"),
+    /** 失败任务数（可重试的安装任务） */
+    retryableCount: (s) => s.tasks.filter((t) => t.status === "failed" && t.kind === "install").length,
+    /** 已完成任务的总耗时（毫秒） */
+    totalElapsed(s): number {
+      return s.tasks.reduce((sum, t) => {
+        if (t._startTs && t._endTs) return sum + (t._endTs - t._startTs);
+        return sum;
+      }, 0);
+    },
     /** 全局状态文字 */
     statusText(state): string {
       if (state.paused) return "已暂停";
@@ -180,6 +192,36 @@ export const useTasksStore = defineStore("tasks", {
       const idx = this.tasks.findIndex((t) => t.id === id);
       if (idx >= 0) this.tasks.splice(idx, 1);
     },
+    /** 重试单个失败任务：重置进度后重新入队 */
+    retry(id: string): boolean {
+      const t = this.tasks.find((x) => x.id === id);
+      if (!t || t.status !== "failed") return false;
+      t.status = "pending";
+      t.progress = 0;
+      t.message = "等待重试";
+      t.code = undefined;
+      t.speed = undefined;
+      t.eta = undefined;
+      t._startTs = undefined;
+      t._endTs = undefined;
+      t._lastMb = undefined;
+      t._lastTs = undefined;
+      return true;
+    },
+    /** 批量重试所有失败任务 */
+    retryAllFailed(): number {
+      let n = 0;
+      for (const t of this.tasks) {
+        if (t.status === "failed" && this.retry(t.id)) n++;
+      }
+      return n;
+    },
+    /** 只清掉已完成 / 失败的任务，保留正在进行和等待中的 */
+    clearFinished(): number {
+      const before = this.tasks.length;
+      this.tasks = this.tasks.filter((t) => t.status === "running" || t.status === "paused" || t.status === "pending");
+      return before - this.tasks.length;
+    },
     clear() {
       this.stop();
       this.tasks = [];
@@ -202,6 +244,7 @@ export const useTasksStore = defineStore("tasks", {
         if (first) {
           first.status = "running";
           first.message = "开始下载";
+          if (!first._startTs) first._startTs = Date.now();
         }
         await queueInstall(installIds);
       }
@@ -286,6 +329,7 @@ export const useTasksStore = defineStore("tasks", {
       const t = this.tasks.find((x) => x.id === p.id);
       if (!t) return;
       if (t.status === "pending" || t.status === "paused") t.status = "running";
+      if (!t._startTs) t._startTs = Date.now();
       // 后端按阶段推送 pct（各阶段从 0 重新计），换算为整任务进度
       if (p.stage === "download" || p.stage === "retry") {
         t.progress = Math.min(90, Math.max(0, p.pct) * 0.9);
@@ -297,12 +341,15 @@ export const useTasksStore = defineStore("tasks", {
         t.progress = 100;
         t.status = "done";
         t.code = "0";
+        t._endTs = Date.now();
       } else if (p.stage === "error") {
         t.status = "failed";
         t.code = p.msg;
+        t._endTs = Date.now();
       } else if (p.stage === "skip") {
         t.status = "failed";
         t.message = "已终止";
+        t._endTs = Date.now();
       }
       if (p.msg) t.message = p.msg;
       // 速度 / 剩余时间：解析 "已下载 X MB / 总计 Y MB"
@@ -335,6 +382,7 @@ export const useTasksStore = defineStore("tasks", {
         const cur = this.tasks.find((t) => t.id === s.currentId);
         if (cur && (cur.status === "pending" || cur.status === "paused")) {
           cur.status = "running";
+          if (!cur._startTs) cur._startTs = Date.now();
         }
       }
       if (!s.running) {
@@ -355,6 +403,8 @@ export const useTasksStore = defineStore("tasks", {
           t.progress = 100;
           t.message = "安装成功";
           t.code = "0";
+          if (!t._startTs) t._startTs = Date.now();
+          t._endTs = Date.now();
         }
       }
       for (const f of s.failed) {
@@ -363,6 +413,8 @@ export const useTasksStore = defineStore("tasks", {
           t.status = "failed";
           t.message = f.reason;
           t.code = f.reason;
+          if (!t._startTs) t._startTs = Date.now();
+          t._endTs = Date.now();
         }
       }
       const total = s.success.length + s.failed.length;
