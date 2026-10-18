@@ -73,15 +73,49 @@ export interface ChangelogEntry {
   notes: string;
 }
 
+export interface HwMemoryModule {
+  manufacturer: string;
+  capacity_gb: number;
+  speed: number;
+  /** 插槽，如 Controller0-ChannelA-DIMM1 */
+  slot?: string;
+  /** DDR4 / DDR5，未知为空 */
+  type?: string;
+}
+
+export interface HwGpu {
+  name: string;
+  /** 显存 MB；0 表示未知 */
+  vram: number;
+  driver?: string;
+  /** 远程/虚拟显示器，没有真实显存 */
+  virtual?: boolean;
+}
+
+export interface HwDisk {
+  model: string;
+  size: number;
+  media?: string;
+  bus?: string;
+  health?: string;
+}
+
+export interface HwVolume {
+  mount: string;
+  total: number;
+  free: number;
+}
+
 export interface HwInfo {
-  cpu: { name: string; cores: number; threads: number };
+  cpu: { name: string; cores: number; threads: number; mhz?: number };
   memory_total: number;
   /** 内存条明细（后端字段 memoryModules） */
-  memoryModules?: { manufacturer: string; capacity_gb: number; speed: number }[];
+  memoryModules?: HwMemoryModule[];
   board: string;
-  /** 显存单位 MB；0 表示未知（WMI 对大于 4GB 的卡经常溢出） */
-  gpus: { name: string; vram: number }[];
-  disks: { model: string; size: number }[];
+  bios?: { version?: string; date?: string };
+  gpus: HwGpu[];
+  disks: HwDisk[];
+  volumes?: HwVolume[];
 }
 
 export interface DiskSpeed {

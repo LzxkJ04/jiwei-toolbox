@@ -23,6 +23,22 @@ pub struct DiskSpeed {
 
 // ---------- PowerShell WMI 辅助 ----------
 
+/// PowerShell 管道在无控制台时可能是 UTF-16 LE，控制台下则是 UTF-8（带或不带 BOM）
+fn decode_ps_stdout(bytes: &[u8]) -> String {
+    let bytes = bytes.strip_prefix(&[0xFF, 0xFE]).unwrap_or(bytes);
+    let utf16 = bytes.len() >= 4 && bytes.len() % 2 == 0 && bytes[1] == 0 && bytes[3] == 0;
+    let text = if utf16 {
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    };
+    text.trim_start_matches('\u{feff}').trim().to_string()
+}
+
 fn ps_json(script: &str) -> Option<serde_json::Value> {
     let full = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; {}", script);
     let mut cmd = std::process::Command::new("powershell");
@@ -33,19 +49,34 @@ fn ps_json(script: &str) -> Option<serde_json::Value> {
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let out = cmd.output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    serde_json::from_str(&text).ok()
+    let text = decode_ps_stdout(&out.stdout);
+    let start = text.find(['{', '['])?;
+    serde_json::from_str(&text[start..]).ok()
 }
 
-/// ConvertTo-Json 单元素时输出对象而非数组 → 统一为数组
+/// ConvertTo-Json 单元素时输出对象而非数组 → 统一为数组。null 视为空。
 fn as_array(v: Option<serde_json::Value>) -> Vec<serde_json::Value> {
     match v {
         Some(serde_json::Value::Array(a)) => a,
+        Some(serde_json::Value::Null) | None => vec![],
         Some(x) => vec![x],
-        None => vec![],
+    }
+}
+
+fn json_text(v: &serde_json::Value, key: &str) -> String {
+    match v.get(key) {
+        Some(serde_json::Value::String(s)) => s.trim().to_string(),
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        Some(serde_json::Value::Bool(b)) => b.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn json_u64(v: &serde_json::Value, key: &str) -> u64 {
+    match v.get(key) {
+        Some(serde_json::Value::Number(n)) => n.as_f64().unwrap_or(0.0).max(0.0) as u64,
+        Some(serde_json::Value::String(s)) => s.trim().parse::<f64>().unwrap_or(0.0).max(0.0) as u64,
+        _ => 0,
     }
 }
 
@@ -61,70 +92,205 @@ fn jnum(v: &serde_json::Value, key: &str, default: f64) -> f64 {
     v.get(key).and_then(|x| x.as_f64()).unwrap_or(default)
 }
 
-/// 物理内存条列表（Win32_PhysicalMemory）
-fn memory_modules_ps() -> Vec<serde_json::Value> {
-    as_array(ps_json(
-        r#"@(Get-CimInstance Win32_PhysicalMemory | Select-Object Manufacturer,Capacity,Speed) | ConvertTo-Json -Compress"#,
-    ))
-    .iter()
-    .map(|m| {
-        json!({
-            "manufacturer": jstr(m, "Manufacturer", "未知"),
-            "capacity_gb": (jnum(m, "Capacity", 0.0) / 1073741824.0 * 10.0).round() / 10.0,
-            "speed": jnum(m, "Speed", 0.0) as u64,
-        })
-    })
-    .collect()
+/// SMBIOS 内存类型码 → DDR 代际。未知返回空串，前端不展示。
+fn mem_type_name(code: u64) -> &'static str {
+    match code {
+        20 => "DDR",
+        21 => "DDR2",
+        24 => "DDR3",
+        26 => "DDR4",
+        34 => "DDR5",
+        _ => "",
+    }
 }
 
-/// 物理磁盘（Win32_DiskDrive）+ 卷（sysinfo 挂载点）
-fn disks_info() -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
-    let disks: Vec<serde_json::Value> = as_array(ps_json(
-        r#"@(Get-CimInstance Win32_DiskDrive | Select-Object Model,Size) | ConvertTo-Json -Compress"#,
-    ))
+/// 远程/虚拟显示设备没有真实显存，不能和独显混在一起看起来像「没读到」。
+fn is_virtual_gpu(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    [
+        "oray",
+        "idd",
+        "virtual",
+        "asklink",
+        "gameviewer",
+        "indirect",
+        "basic display",
+        "remote",
+        "spacedesk",
+        "parsec",
+        "sunshine",
+        "iddcx",
+        "hyper-v",
+    ]
     .iter()
-    .map(|d| {
-        // Win32_DiskDrive.Size 可能是字符串数字
-        let size_raw = d.get("Size").cloned().unwrap_or(serde_json::Value::Null);
-        let size_b = match &size_raw {
-            serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
-            serde_json::Value::String(st) => st.trim().parse::<f64>().unwrap_or(0.0),
-            _ => 0.0,
-        };
-        json!({
-            "model": jstr(d, "Model", "未知"),
-            "capacity_gb": (size_b / 1073741824.0).round() as u64,
-            "size": size_b as u64,
-        })
-    })
-    .collect();
+    .any(|k| n.contains(k))
+}
 
-    let vol_disks = sysinfo::Disks::new_with_refreshed_list();
-    let volumes: Vec<serde_json::Value> = vol_disks
+/// WMI 日期：`yyyy-MM-dd`、`/Date(毫秒)/`、DMTF `yyyyMMdd...`
+fn parse_wmi_date(s: &str) -> String {
+    let t = s.trim();
+    if t.len() >= 10 && t.as_bytes().get(4) == Some(&b'-') && t.as_bytes().get(7) == Some(&b'-') {
+        return t.chars().take(10).collect();
+    }
+    if let Some(start) = t.find("Date(") {
+        let num: String = t[start + 5..].chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(ms) = num.parse::<i64>() {
+            return unix_days_to_ymd(ms.div_euclid(86_400_000));
+        }
+    }
+    if t.len() >= 8 && t.as_bytes()[..8].iter().all(|b| b.is_ascii_digit()) {
+        return format!("{}-{}-{}", &t[0..4], &t[4..6], &t[6..8]);
+    }
+    String::new()
+}
+
+/// Unix 天数（1970-01-01 起）→ 公历。Howard Hinnant civil_from_days。
+fn unix_days_to_ymd(days: i64) -> String {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = y + if m <= 2 { 1 } else { 0 };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Storage 枚举在部分系统上被 ConvertTo-Json 写成数字，界面就会空白。
+fn map_storage_enum(kind: &str, raw: &str) -> String {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return String::new();
+    }
+    if raw.chars().any(|c| !c.is_ascii_digit()) {
+        return raw.to_string();
+    }
+    let n: i64 = raw.parse().unwrap_or(-1);
+    let mapped: Option<&str> = match kind {
+        "bus" => match n {
+            3 => Some("ATA"),
+            7 => Some("USB"),
+            8 => Some("RAID"),
+            10 => Some("SAS"),
+            11 => Some("SATA"),
+            17 => Some("NVMe"),
+            _ => None,
+        },
+        "media" => match n {
+            3 => Some("HDD"),
+            4 => Some("SSD"),
+            5 => Some("SCM"),
+            _ => None,
+        },
+        "health" => match n {
+            0 => Some("Healthy"),
+            1 => Some("Warning"),
+            2 => Some("Unhealthy"),
+            _ => None,
+        },
+        _ => None,
+    };
+    mapped.unwrap_or(raw).to_string()
+}
+
+fn reg_qword(k: &RegKey, name: &str) -> u64 {
+    k.get_value::<u64, _>(name)
+        .or_else(|_| k.get_value::<u32, _>(name).map(|v| v as u64))
+        .unwrap_or(0)
+}
+
+/// 显示适配器类里的专用显存（字节→MB）和驱动版本。同名取较大显存，避开历史残留里的 0。
+fn registry_gpu_extra() -> std::collections::HashMap<String, (u64, String, String)> {
+    let mut map = std::collections::HashMap::<String, (u64, String, String)>::new();
+    let base = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+    let Ok(k) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(base) else {
+        return map;
+    };
+    for sub in k.enum_keys().flatten() {
+        if !sub.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(sk) = k.open_subkey(&sub) else { continue };
+        let Ok(desc) = sk.get_value::<String, _>("DriverDesc") else { continue };
+        let desc = desc.trim().to_string();
+        if desc.is_empty() {
+            continue;
+        }
+        let mb = reg_qword(&sk, "HardwareInformation.qwMemorySize") / 1_048_576;
+        let driver = sk.get_value::<String, _>("DriverVersion").unwrap_or_default();
+        map.entry(desc.to_ascii_lowercase())
+            .and_modify(|(old_mb, old_drv, old_name)| {
+                if mb > *old_mb {
+                    *old_mb = mb;
+                    *old_name = desc.clone();
+                }
+                if old_drv.is_empty() && !driver.is_empty() {
+                    *old_drv = driver.clone();
+                }
+            })
+            .or_insert((mb, driver, desc));
+    }
+    map
+}
+
+fn cpu_name_registry() -> String {
+    RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+        .ok()
+        .and_then(|k| k.get_value::<String, _>("ProcessorNameString").ok())
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 一次 CIM 查询拿齐 CPU / 主板 / BIOS / 显卡 / 磁盘 / 内存。
+/// 注册表 BIOS 键在不少机器上是空的，不能只靠它。
+fn cim_snapshot() -> Option<serde_json::Value> {
+    ps_json(
+        r#"
+$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+$bb = Get-CimInstance Win32_BaseBoard
+$bios = Get-CimInstance Win32_BIOS
+$date = ''
+if ($bios.ReleaseDate) { try { $date = Get-Date $bios.ReleaseDate -Format 'yyyy-MM-dd' } catch { $date = '' } }
+$phys = @()
+try { $phys = @(Get-PhysicalDisk | Select-Object FriendlyName,MediaType,BusType,HealthStatus,Size) } catch {}
+@{
+  cpu = @{ name = [string]$cpu.Name; cores = $cpu.NumberOfCores; threads = $cpu.NumberOfLogicalProcessors; mhz = $cpu.MaxClockSpeed }
+  board = @{ manufacturer = [string]$bb.Manufacturer; product = [string]$bb.Product; version = [string]$bb.Version }
+  bios = @{ version = [string]$bios.SMBIOSBIOSVersion; date = [string]$date }
+  gpus = @(Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM,DriverVersion)
+  disks = @(Get-CimInstance Win32_DiskDrive | Select-Object Model,Size,InterfaceType)
+  phys = $phys
+  mem = @(Get-CimInstance Win32_PhysicalMemory | Select-Object Manufacturer,DeviceLocator,Speed,Capacity,SMBIOSMemoryType)
+} | ConvertTo-Json -Compress -Depth 6
+"#,
+    )
+}
+
+fn volumes_info() -> Vec<serde_json::Value> {
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    disks
         .list()
         .iter()
+        .filter(|d| d.total_space() > 0 && !d.mount_point().as_os_str().is_empty())
         .map(|d| {
             json!({
                 "mount": d.mount_point().to_string_lossy(),
-                "total_gb": d.total_space() / 1073741824,
-                "free_gb": d.available_space() / 1073741824,
+                "total": d.total_space(),
+                "free": d.available_space(),
             })
         })
-        .collect();
-    (disks, volumes)
+        .collect()
 }
 
-/// BIOS / 主板（注册表 HARDWARE\DESCRIPTION\System\BIOS）
-fn bios_info() -> (String, String, String, String) {
-    let (mut mfr, mut product, mut ver, mut date) =
-        (String::new(), String::new(), String::new(), String::new());
-    if let Ok(k) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(r"HARDWARE\DESCRIPTION\System\BIOS") {
-        mfr = k.get_value::<String, _>("SystemManufacturer").unwrap_or_default();
-        product = k.get_value::<String, _>("SystemProductName").unwrap_or_default();
-        ver = k.get_value::<String, _>("BIOSVersion").unwrap_or_default();
-        date = k.get_value::<String, _>("BIOSReleaseDate").unwrap_or_default();
-    }
-    (mfr, product, ver, date)
+fn nonempty(s: &str) -> bool {
+    let t = s.trim();
+    !t.is_empty() && !t.eq_ignore_ascii_case("default string") && !t.eq_ignore_ascii_case("to be filled by o.e.m.")
 }
 
 /// AdapterRAM（字节）→ MB。WMI 用 uint32，大于 4GB 的显卡常返回 -1 或溢出值，此时记 0（未知）。
@@ -136,40 +302,116 @@ fn vram_mb(raw: f64) -> u64 {
     (raw / 1_048_576.0).round() as u64
 }
 
-/// 显卡列表（WMI Win32_VideoController：名称 + 显存 MB）
-fn gpu_list() -> Vec<serde_json::Value> {
-    let arr = as_array(ps_json(
-        r#"@(Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM) | ConvertTo-Json -Compress"#,
-    ));
-    let mut out: Vec<serde_json::Value> = arr
-        .iter()
-        .map(|g| {
-            let name = jstr(g, "Name", "");
-            let vram = vram_mb(jnum(g, "AdapterRAM", 0.0));
-            json!({ "name": if name.trim().is_empty() { "未知显卡".into() } else { name }, "vram": vram })
-        })
-        .collect();
-    // WMI 查询失败时回退：注册表 DriverDesc（无显存信息）
-    if out.is_empty() {
-        let base = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
-        if let Ok(k) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(base) {
-            for sub in k.enum_keys().flatten() {
-                if let Ok(sk) = k.open_subkey(&sub) {
-                    if let Ok(desc) = sk.get_value::<String, _>("DriverDesc") {
-                        if !desc.trim().is_empty() {
-                            out.push(json!({ "name": desc, "vram": 0 }));
-                        }
-                    }
-                }
-            }
-        }
+/// AdapterRAM 在 4GB 附近饱和时不可信（uint32），有注册表专用显存就用注册表。
+fn pick_vram_mb(adapter_ram: f64, registry_mb: u64) -> u64 {
+    if registry_mb > 0 {
+        return registry_mb;
     }
-    // 去重
-    out.dedup_by(|a, b| a["name"] == b["name"]);
-    out
+    vram_mb(adapter_ram)
 }
 
-/// 硬件信息总览（CPU / 内存 / 主板 / BIOS / 显卡 / 磁盘）
+fn gpus_from_snapshot(
+    rows: &[serde_json::Value],
+    reg: &std::collections::HashMap<String, (u64, String, String)>,
+) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for g in rows {
+        let name = json_text(g, "Name");
+        if name.is_empty() {
+            continue;
+        }
+        let extra = reg.get(&name.to_ascii_lowercase());
+        let registry_mb = extra.map(|x| x.0).unwrap_or(0);
+        let mut driver = json_text(g, "DriverVersion");
+        if driver.is_empty() {
+            driver = extra.map(|x| x.1.clone()).unwrap_or_default();
+        }
+        let vram = pick_vram_mb(jnum(g, "AdapterRAM", 0.0), registry_mb);
+        out.push(json!({
+            "name": name,
+            "vram": vram,
+            "driver": driver,
+            "virtual": is_virtual_gpu(&name),
+        }));
+    }
+    if out.is_empty() {
+        for (_key, (mb, driver, name)) in reg {
+            if *mb == 0 || is_virtual_gpu(name) {
+                continue;
+            }
+            out.push(json!({
+                "name": name,
+                "vram": mb,
+                "driver": driver,
+                "virtual": false,
+            }));
+        }
+    }
+    let mut best: Vec<serde_json::Value> = Vec::new();
+    for g in out {
+        if let Some(ex) = best.iter_mut().find(|e| e["name"] == g["name"]) {
+            if g["vram"].as_u64().unwrap_or(0) > ex["vram"].as_u64().unwrap_or(0) {
+                *ex = g;
+            }
+        } else {
+            best.push(g);
+        }
+    }
+    best.sort_by_key(|g| g["virtual"].as_bool().unwrap_or(false));
+    best
+}
+
+fn disks_from_snapshot(rows: &[serde_json::Value], phys: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    rows.iter()
+        .map(|d| {
+            let model = json_text(d, "Model");
+            let size = json_u64(d, "Size");
+            let matched = phys.iter().find(|p| {
+                let friendly = json_text(p, "FriendlyName");
+                !friendly.is_empty()
+                    && (friendly.eq_ignore_ascii_case(model.trim())
+                        || model.to_ascii_lowercase().contains(&friendly.to_ascii_lowercase()))
+            });
+            let bus = matched
+                .map(|p| map_storage_enum("bus", &json_text(p, "BusType")))
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| json_text(d, "InterfaceType"));
+            let media = matched
+                .map(|p| map_storage_enum("media", &json_text(p, "MediaType")))
+                .unwrap_or_default();
+            let health = matched
+                .map(|p| map_storage_enum("health", &json_text(p, "HealthStatus")))
+                .unwrap_or_default();
+            json!({
+                "model": if model.is_empty() { "未知磁盘".to_string() } else { model },
+                "size": size,
+                "bus": bus,
+                "media": media,
+                "health": health,
+            })
+        })
+        .collect()
+}
+
+fn memory_from_snapshot(rows: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    rows.iter()
+        .map(|m| {
+            let manufacturer = json_text(m, "Manufacturer");
+            let slot = json_text(m, "DeviceLocator");
+            let kind = mem_type_name(json_u64(m, "SMBIOSMemoryType"));
+            json!({
+                "manufacturer": manufacturer,
+                "capacity_gb": (json_u64(m, "Capacity") as f64 / 1073741824.0 * 10.0).round() / 10.0,
+                "speed": json_u64(m, "Speed"),
+                "slot": slot,
+                "type": kind,
+            })
+        })
+        .filter(|m| m["capacity_gb"].as_f64().unwrap_or(0.0) > 0.0 || !json_text(m, "manufacturer").is_empty())
+        .collect()
+}
+
+/// 硬件信息总览（CPU / 内存 / 主板 / BIOS / 显卡 / 磁盘 / 分区）
 #[tauri::command]
 pub async fn hw_info() -> serde_json::Value {
     use sysinfo::System;
@@ -177,40 +419,63 @@ pub async fn hw_info() -> serde_json::Value {
     sys.refresh_cpu_usage();
 
     let cpus = sys.cpus();
-    let threads = cpus.len();
-    let brand = cpus.first().map(|c| c.brand().trim().to_string()).unwrap_or_default();
-    let cores = sys.physical_core_count().unwrap_or(threads);
+    let sys_threads = cpus.len();
+    let sys_brand = cpus
+        .first()
+        .map(|c| c.brand().split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default();
+    let sys_cores = sys.physical_core_count().unwrap_or(sys_threads);
     let memory_total = sys.total_memory();
 
-    let (board_mfr, board_product, bios_ver, bios_date) = bios_info();
-    let gpus = gpu_list();
+    let snap = cim_snapshot().unwrap_or(serde_json::Value::Null);
+    let reg_gpu = registry_gpu_extra();
 
-    let mut memory_modules = memory_modules_ps();
-    if memory_modules.is_empty() {
-        memory_modules = vec![json!({
-            "manufacturer": "未知",
-            "capacity_gb": (memory_total as f64 / 1073741824.0 * 10.0).round() / 10.0,
-            "speed": 0,
-        })];
-    }
-    let (disks, volumes) = disks_info();
+    let cpu_name = {
+        let from_cim = json_text(&snap["cpu"], "name");
+        if nonempty(&from_cim) {
+            from_cim
+        } else {
+            let from_reg = cpu_name_registry();
+            if nonempty(&from_reg) { from_reg } else { sys_brand }
+        }
+    };
+    let cores = json_u64(&snap["cpu"], "cores");
+    let threads = json_u64(&snap["cpu"], "threads");
+    let mhz = json_u64(&snap["cpu"], "mhz");
 
-    let board = [board_mfr.trim(), board_product.trim()]
-        .iter()
-        .filter(|x| !x.is_empty())
-        .cloned()
+    let board_mfr = json_text(&snap["board"], "manufacturer");
+    let board_product = json_text(&snap["board"], "product");
+    let board_ver = json_text(&snap["board"], "version");
+    let board = [board_mfr.as_str(), board_product.as_str(), board_ver.as_str()]
+        .into_iter()
+        .filter(|s| nonempty(s))
         .collect::<Vec<_>>()
         .join(" ");
+    let bios_ver = json_text(&snap["bios"], "version");
+    let bios_date = parse_wmi_date(&json_text(&snap["bios"], "date"));
+
+    let gpus = gpus_from_snapshot(&as_array(snap.get("gpus").cloned()), &reg_gpu);
+    let disks = disks_from_snapshot(
+        &as_array(snap.get("disks").cloned()),
+        &as_array(snap.get("phys").cloned()),
+    );
+    let memory_modules = memory_from_snapshot(&as_array(snap.get("mem").cloned()));
+
     json!({
-        "cpu": { "name": brand, "cores": cores, "threads": threads },
+        "cpu": {
+            "name": cpu_name,
+            "cores": if cores > 0 { cores } else { sys_cores as u64 },
+            "threads": if threads > 0 { threads } else { sys_threads as u64 },
+            "mhz": mhz,
+        },
         "memory_total": memory_total,
         "memoryModules": memory_modules,
-        "motherboard": { "manufacturer": board_mfr, "product": board_product },
+        "motherboard": { "manufacturer": board_mfr, "product": board_product, "version": board_ver },
         "board": board,
         "bios": { "version": bios_ver, "date": bios_date },
         "gpus": gpus,
         "disks": disks,
-        "volumes": volumes,
+        "volumes": volumes_info(),
     })
 }
 
@@ -579,9 +844,9 @@ pub async fn disk_smart() -> Result<Vec<serde_json::Value>, String> {
             json!({
                 "model": jstr(d, "FriendlyName", "未知"),
                 "serial": jstr(d, "SerialNumber", ""),
-                "bus_type": jstr(d, "BusType", ""),
-                "media": jstr(d, "MediaType", ""),
-                "health": jstr(d, "HealthStatus", ""),
+                "bus_type": map_storage_enum("bus", &json_text(d, "BusType")),
+                "media": map_storage_enum("media", &json_text(d, "MediaType")),
+                "health": map_storage_enum("health", &json_text(d, "HealthStatus")),
                 "status": jany(d, "OperationalStatus", ""),
                 "temperature_c": jopt(r, "Temperature"),
                 "power_on_hours": jopt(r, "PowerOnHours").map(|v| v as u64),
@@ -743,7 +1008,9 @@ fn run_mem_test(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{vram_mb, DiskSpeed};
+    use super::{
+        is_virtual_gpu, map_storage_enum, mem_type_name, parse_wmi_date, pick_vram_mb, vram_mb, DiskSpeed,
+    };
 
     #[test]
     fn vram_bytes_to_mb() {
@@ -765,5 +1032,37 @@ mod tests {
         let v = serde_json::to_value(DiskSpeed { read_mbps: 1.5, write_mbps: 2.5 }).unwrap();
         assert_eq!(v["read_mbps"], 1.5);
         assert_eq!(v["write_mbps"], 2.5);
+    }
+
+    #[test]
+    fn vram_prefers_registry_when_wmi_saturates() {
+        // RTX 3060 一类显卡：WMI AdapterRAM 停在 4GB 以下，注册表 qwMemorySize 才是 12GB
+        assert_eq!(pick_vram_mb(4_293_918_720.0, 12288), 12288);
+        assert_eq!(pick_vram_mb(512.0 * 1024.0 * 1024.0, 0), 512);
+    }
+
+    #[test]
+    fn virtual_display_is_not_a_real_gpu() {
+        assert!(is_virtual_gpu("OrayIddDriver Device"));
+        assert!(is_virtual_gpu("AskLink Display Adapter (SDR)"));
+        assert!(is_virtual_gpu("GameViewer Virtual Display Adapter"));
+        assert!(!is_virtual_gpu("NVIDIA GeForce RTX 3060"));
+    }
+
+    #[test]
+    fn memory_and_disk_enums_are_readable() {
+        assert_eq!(mem_type_name(26), "DDR4");
+        assert_eq!(mem_type_name(34), "DDR5");
+        assert_eq!(map_storage_enum("bus", "17"), "NVMe");
+        assert_eq!(map_storage_enum("media", "4"), "SSD");
+        assert_eq!(map_storage_enum("health", "0"), "Healthy");
+        assert_eq!(map_storage_enum("bus", "NVMe"), "NVMe");
+    }
+
+    #[test]
+    fn wmi_dates_normalize() {
+        assert_eq!(parse_wmi_date("2024-03-06"), "2024-03-06");
+        assert_eq!(parse_wmi_date("/Date(1709683200000)/"), "2024-03-06");
+        assert_eq!(parse_wmi_date("20240306000000.000000+000"), "2024-03-06");
     }
 }

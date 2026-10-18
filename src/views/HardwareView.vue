@@ -38,18 +38,48 @@ function fmtCountdown(totalSec: number) {
 const hw = ref<HwInfo | null>(null);
 const hwLoading = ref(false);
 
-const memLine = computed(() => {
-  const mods = hw.value?.memoryModules ?? [];
-  if (mods.length === 0) return "";
-  return mods
-    .map((m) => {
-      const who = (m.manufacturer || "").trim();
-      const cap = m.capacity_gb ? `${m.capacity_gb}GB` : "";
-      const spd = m.speed ? `${m.speed}MHz` : "";
-      return [who, cap, spd].filter(Boolean).join(" ");
-    })
-    .filter(Boolean)
-    .join(" · ");
+function moduleLine(m: { manufacturer?: string; capacity_gb?: number; speed?: number; slot?: string; type?: string }) {
+  const who = (m.manufacturer || "").trim();
+  const cap = m.capacity_gb ? `${m.capacity_gb} GB` : "";
+  const kind = (m.type || "").trim();
+  const spd = m.speed ? `${m.speed} MHz` : "";
+  const slot = (m.slot || "").trim();
+  return [who, cap, kind, spd, slot].filter(Boolean).join(" · ");
+}
+
+function cpuSub(cpu?: { cores?: number; threads?: number; mhz?: number }) {
+  const base = `${cpu?.cores || 0} 核 / ${cpu?.threads || 0} 线程`;
+  const mhz = cpu?.mhz || 0;
+  if (!mhz) return base;
+  const clock = mhz >= 1000 ? `${(mhz / 1000).toFixed(2)} GHz` : `${mhz} MHz`;
+  return `${base} · 最高 ${clock}`;
+}
+
+function gpuSub(g: { vram?: number; driver?: string; virtual?: boolean }) {
+  const parts: string[] = [];
+  if (g.virtual) parts.push("虚拟显示器");
+  const vram = vramText(g.vram || 0);
+  if (vram) parts.push(vram);
+  else if (!g.virtual) parts.push("显存未报告");
+  if (g.driver) parts.push(`驱动 ${g.driver}`);
+  return parts.join(" · ");
+}
+
+function diskSub(d: { size?: number; media?: string; bus?: string; health?: string }) {
+  const parts: string[] = [];
+  if (d.size && d.size > 0) parts.push(formatBytes(d.size));
+  if (d.bus && d.bus !== "SCSI") parts.push(d.bus);
+  if (d.media) parts.push(d.media);
+  if (d.health) parts.push(healthMeta(d.health).label);
+  return parts.join(" · ") || "容量未知";
+}
+
+const biosLine = computed(() => {
+  const b = hw.value?.bios;
+  if (!b) return "";
+  const ver = (b.version || "").trim();
+  const date = (b.date || "").trim();
+  return [ver ? `BIOS ${ver}` : "", date].filter(Boolean).join(" · ");
 });
 
 async function loadHw() {
@@ -62,7 +92,12 @@ function vramText(vram: number) {
   if (!vram || vram <= 0) return "";
   // 后端已换算为 MB；若仍是字节（旧数据 > 64GB 当 MB 不可能）则再除一次
   const mb = vram > 65536 ? Math.round(vram / 1048576) : Math.round(vram);
-  return mb > 0 ? `${mb} MB 显存` : "";
+  if (mb <= 0) return "";
+  if (mb >= 1024) {
+    const gb = mb / 1024;
+    return `${Number.isInteger(gb) ? gb.toFixed(0) : gb.toFixed(1)} GB 显存`;
+  }
+  return `${mb} MB 显存`;
 }
 
 /* ============ CPU 烤机 ============ */
@@ -346,7 +381,7 @@ onUnmounted(() => {
             <p class="truncate text-sm font-semibold text-[var(--text-strong)]" :title="hw.cpu.name">
               {{ hw.cpu.name || "—" }}
             </p>
-            <p class="mt-1 text-xs text-[var(--muted)]">{{ hw.cpu.cores }} 核 / {{ hw.cpu.threads }} 线程</p>
+            <p class="mt-1 text-xs text-[var(--muted)]">{{ cpuSub(hw.cpu) }}</p>
           </div>
 
           <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4">
@@ -354,7 +389,14 @@ onUnmounted(() => {
               <MemoryStick class="h-3.5 w-3.5" /> 内存总量
             </p>
             <p class="text-sm font-semibold text-[var(--text-strong)]">{{ formatBytes(hw.memory_total) }}</p>
-            <p v-if="memLine" class="mt-1 truncate text-xs text-[var(--muted)]" :title="memLine">{{ memLine }}</p>
+            <p
+              v-for="(m, i) in hw.memoryModules || []"
+              :key="i"
+              class="mt-1 truncate text-xs text-[var(--muted)]"
+              :title="moduleLine(m)"
+            >
+              {{ moduleLine(m) }}
+            </p>
           </div>
 
           <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4">
@@ -364,16 +406,17 @@ onUnmounted(() => {
             <p class="truncate text-sm font-semibold text-[var(--text-strong)]" :title="hw.board">
               {{ hw.board || "—" }}
             </p>
+            <p v-if="biosLine" class="mt-1 truncate text-xs text-[var(--muted)]" :title="biosLine">{{ biosLine }}</p>
           </div>
 
           <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4">
             <p class="mb-1.5 flex items-center gap-1.5 text-xs text-[var(--muted)]">
               <Monitor class="h-3.5 w-3.5" /> 显卡（{{ hw.gpus.length }}）
             </p>
-            <p v-for="(g, i) in hw.gpus" :key="i" class="truncate text-sm font-semibold text-[var(--text-strong)]" :title="g.name">
-              {{ g.name || "—" }}
-              <span v-if="vramText(g.vram)" class="ml-1 text-xs font-normal text-[var(--muted)]">{{ vramText(g.vram) }}</span>
-            </p>
+            <div v-for="(g, i) in hw.gpus" :key="i" class="mb-2 last:mb-0">
+              <p class="truncate text-sm font-semibold text-[var(--text-strong)]" :title="g.name">{{ g.name || "—" }}</p>
+              <p class="truncate text-xs text-[var(--muted)]" :title="gpuSub(g)">{{ gpuSub(g) }}</p>
+            </div>
             <p v-if="hw.gpus.length === 0" class="text-sm text-[var(--muted)]">—</p>
           </div>
 
@@ -381,11 +424,22 @@ onUnmounted(() => {
             <p class="mb-1.5 flex items-center gap-1.5 text-xs text-[var(--muted)]">
               <HardDrive class="h-3.5 w-3.5" /> 磁盘（{{ hw.disks.length }}）
             </p>
-            <p v-for="(d, i) in hw.disks" :key="i" class="truncate text-sm text-[var(--text)]" :title="d.model">
-              {{ d.model || "—" }}
-              <span class="ml-1 text-xs text-[var(--muted)]">{{ formatBytes(d.size) }}</span>
-            </p>
+            <div v-for="(d, i) in hw.disks" :key="i" class="mb-2 last:mb-0">
+              <p class="truncate text-sm text-[var(--text)]" :title="d.model">{{ d.model || "—" }}</p>
+              <p class="truncate text-xs text-[var(--muted)]">{{ diskSub(d) }}</p>
+            </div>
             <p v-if="hw.disks.length === 0" class="text-sm text-[var(--muted)]">—</p>
+            <div v-if="hw.volumes && hw.volumes.length" class="mt-3 border-t border-[var(--card-border)] pt-2">
+              <p
+                v-for="(v, i) in hw.volumes"
+                :key="i"
+                class="truncate text-xs text-[var(--muted)]"
+                :title="v.mount"
+              >
+                {{ v.mount }}
+                <span class="ml-1">{{ formatBytes(v.free) }} 可用 / {{ formatBytes(v.total) }}</span>
+              </p>
+            </div>
           </div>
         </div>
       </Card>
