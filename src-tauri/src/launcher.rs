@@ -477,6 +477,49 @@ pub fn relaunch_repair() -> Result<(), String> {
     std::process::exit(0);
 }
 
+/// 以管理员身份重启自身（触发 UAC）。
+/// 用 ShellExecuteW 的 "runas" 动词，这是唯一能真正提权的路径——
+/// CreateProcess 只会继承当前令牌，无法提升。
+#[tauri::command]
+pub fn relaunch_as_admin() -> Result<(), String> {
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(
+            hwnd: *mut core::ffi::c_void,
+            lp_operation: *const u16,
+            lp_file: *const u16,
+            lp_parameters: *const u16,
+            lp_directory: *const u16,
+            n_show_cmd: i32,
+        ) -> isize;
+    }
+    let exe = std::env::current_exe().map_err(|e| format!("定位自身失败: {e}"))?;
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+    let op = wide("runas");
+    let file = wide(&exe.to_string_lossy());
+    // 便携模式重启后仍以 --portable 进入，避免跳去安装向导
+    let params = wide("--portable");
+    unsafe {
+        // 返回值 <= 32 表示失败；5 是用户取消了 UAC
+        let ret = ShellExecuteW(
+            std::ptr::null_mut(),
+            op.as_ptr(),
+            file.as_ptr(),
+            params.as_ptr(),
+            std::ptr::null(),
+            1, // SW_SHOWNORMAL
+        );
+        if ret <= 32 {
+            return Err(if ret == 5 {
+                "已取消管理员授权".to_string()
+            } else {
+                format!("提升权限失败（ShellExecute 返回 {ret}）")
+            });
+        }
+    }
+    std::process::exit(0);
+}
+
 /// 修复项结果（repair-done 事件 items 元素）
 #[derive(serde::Serialize, Clone)]
 pub struct RepairItem {

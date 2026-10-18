@@ -316,6 +316,7 @@ pub fn run() {
             launcher::inst_finish,
             launcher::unins_start,
             launcher::relaunch_repair,
+            launcher::relaunch_as_admin,
             launcher::relaunch_portable,
             launcher::repair_start,
             launcher::inst_detect_existing,

@@ -27,16 +27,13 @@ function openPalette() {
       <!-- 命令面板入口 -->
       <button
         type="button"
-        title="搜索页面与命令（Ctrl+K）"
+        title="搜索页面与功能"
         class="mb-2 flex w-full cursor-pointer items-center gap-3 overflow-hidden rounded-lg border border-[var(--card-border)] py-1.5 text-xs text-[var(--muted)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
         :class="route.collapsed ? 'justify-center px-0' : 'px-3'"
         @click="openPalette"
       >
         <Search class="h-4 w-4 shrink-0" />
-        <template v-if="!route.collapsed">
-          <span class="truncate">搜索</span>
-          <kbd class="ml-auto shrink-0 rounded border border-[var(--card-border)] px-1 py-0.5 text-[10px]">Ctrl K</kbd>
-        </template>
+        <span v-if="!route.collapsed" class="truncate">搜索</span>
       </button>
       <button
         v-for="item in NAV_ITEMS"

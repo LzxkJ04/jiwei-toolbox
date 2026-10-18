@@ -408,8 +408,27 @@ export function onInstallProgress(handler: (p: InstallProgress) => void): Promis
   return listen<InstallProgress>("install-progress", (e) => handler(e.payload));
 }
 
-export function onCpuLoad(handler: (data: { pct: number }) => void): Promise<UnlistenFn> {
-  return listen<{ pct: number }>("cpu-load", (e) => handler(e.payload));
+export interface CpuLoadInfo {
+  pct: number;
+  /** 当前温度，本轮未采样时为 null */
+  temp?: number | null;
+  /** 本次压测的峰值温度 */
+  peak?: number;
+}
+
+export function onCpuLoad(handler: (data: CpuLoadInfo) => void): Promise<UnlistenFn> {
+  return listen<CpuLoadInfo>("cpu-load", (e) => handler(e.payload));
+}
+
+/** 压测结束原因：超温保护还是到时自然结束 */
+export interface CpuBurnEnd {
+  over_temp: boolean;
+  peak: number;
+  limit: number;
+}
+
+export function onCpuBurnEnd(handler: (data: CpuBurnEnd) => void): Promise<UnlistenFn> {
+  return listen<CpuBurnEnd>("cpu-burn-end", (e) => handler(e.payload));
 }
 
 export function onGpuLoad(handler: (data: GpuLoad) => void): Promise<UnlistenFn> {
@@ -800,6 +819,8 @@ export function onUninstallerDone(handler: (d: { ok: boolean }) => void): Promis
 // —— 修复模式
 /** 从主程序重启进入修复模式（后端 spawn 自身 --repair 后退出当前进程） */
 export const relaunchRepair = () => tryCall<null>("relaunch_repair");
+/** 以管理员身份重启（触发 UAC）；用户取消会 reject */
+export const relaunchAsAdmin = () => invoke<null>("relaunch_as_admin");
 /** 开始修复：校验程序文件 / 重建 dirs.json / 修复快捷方式与文件关联 */
 export const repairStart = () => tryCall<null>("repair_start");
 

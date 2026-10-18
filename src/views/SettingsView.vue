@@ -67,6 +67,21 @@ const retentionOpts = [
 // —— 自动备份清单
 const autoBackupInventory = ref<boolean | null>(null);
 
+// —— 压测温度上限（超温自动终止）
+const burnMaxTemp = ref("95");
+const tempOpts = [
+  { value: "75", label: "75℃（保守）" },
+  { value: "85", label: "85℃" },
+  { value: "90", label: "90℃" },
+  { value: "95", label: "95℃（默认）" },
+  { value: "100", label: "100℃" },
+];
+
+async function onTempChange(v: string) {
+  burnMaxTemp.value = v;
+  await persistSetting("burn_max_temp_c", v, `压测温度上限已设为 ${v}℃`);
+}
+
 // —— 缓存管理弹窗
 const cacheDialogOpen = ref(false);
 
@@ -201,6 +216,8 @@ onMounted(async () => {
   if (ph) proxyHost.value = ph;
   const pp = await getSetting("proxy_port");
   if (pp) proxyPort.value = pp;
+  const bt = await getSetting("burn_max_temp_c");
+  if (bt) burnMaxTemp.value = bt;
 });
 
 async function toggleAutostart(v: boolean) {
@@ -535,6 +552,22 @@ async function doReset() {  theme.setMode("dark");
           :options="retentionOpts"
           class="w-28"
           @update:model-value="onLogRetentionChange"
+        />
+      </Card>
+
+      <!-- 压测温度保护 -->
+      <Card class="flex items-center justify-between p-5">
+        <div class="min-w-0">
+          <h4 class="font-semibold">压测温度保护</h4>
+          <p class="mt-1 text-xs text-[var(--muted)]">
+            CPU 烤机时温度达到该上限立即自动终止，防止硬件过热。设置过低会频繁中断压测。
+          </p>
+        </div>
+        <Select
+          :model-value="burnMaxTemp"
+          :options="tempOpts"
+          class="w-36 shrink-0"
+          @update:model-value="onTempChange"
         />
       </Card>
 

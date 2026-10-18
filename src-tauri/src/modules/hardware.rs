@@ -718,21 +718,73 @@ pub fn cpu_burn_start(app: tauri::AppHandle, seconds: u64) {
         }
     }
 
-    // 监控线程：采样真实 CPU 负载率
+    // 监控线程：采样真实 CPU 负载率 + 温度，超温自动终止
     let monitor_app = app;
+    let max_temp = max_temp_setting();
     if let Ok(mut m) = BURN_MONITOR.lock() {
         m.replace(std::thread::spawn(move || {
             use sysinfo::System;
             let mut sys = System::new_all();
             let start = Instant::now();
+            let mut peak = 0.0f64;
+            let mut over_temp = false;
             while BURN_RUN.load(Ordering::Relaxed) && start.elapsed().as_secs() < seconds {
                 std::thread::sleep(Duration::from_millis(1000));
                 sys.refresh_cpu_usage();
                 let pct = sys.global_cpu_usage();
-                let _ = monitor_app.emit("cpu-load", json!({ "pct": pct }));
+
+                // 每 4 秒读一次温度：WMI 查询较重，太频繁会拖慢压测本身
+                let mut temp: Option<f64> = None;
+                if start.elapsed().as_secs() % 4 == 0 {
+                    temp = read_cpu_temp_sync();
+                    if let Some(t) = temp {
+                        if t > peak {
+                            peak = t;
+                        }
+                        // 超过硬阈值立即停：文档要求「超温自动终止，防止硬件过热」
+                        if max_temp > 0.0 && t >= max_temp {
+                            over_temp = true;
+                            BURN_RUN.store(false, Ordering::Relaxed);
+                        }
+                    }
+                }
+
+                let _ = monitor_app.emit(
+                    "cpu-load",
+                    json!({ "pct": pct, "temp": temp, "peak": peak }),
+                );
             }
             BURN_RUN.store(false, Ordering::Relaxed);
+            // 通知前端是「到时结束」还是「超温保护」
+            let _ = monitor_app.emit(
+                "cpu-burn-end",
+                json!({ "over_temp": over_temp, "peak": round1(peak), "limit": max_temp }),
+            );
         }));
+    }
+}
+
+/// 读设置里的温度上限；未配置或非法时回退 95℃（多数桌面 CPU 的 Tjmax 附近）
+fn max_temp_setting() -> f64 {
+    let v = crate::modules::common::read_setting_raw("burn_max_temp_c");
+    let parsed = v
+        .as_ref()
+        .and_then(|x| match x {
+            serde_json::Value::Number(n) => n.as_f64(),
+            serde_json::Value::String(s) => s.trim().parse::<f64>().ok(),
+            _ => None,
+        })
+        .unwrap_or(0.0);
+    resolve_max_temp(parsed)
+}
+
+/// 温度上限合法性判定（抽成纯函数便于单测）。
+/// 允许 50-110℃，范围外一律回退 95℃；0 或负数视为未配置。
+fn resolve_max_temp(raw: f64) -> f64 {
+    if (50.0..=110.0).contains(&raw) {
+        raw
+    } else {
+        95.0
     }
 }
 
@@ -1062,9 +1114,9 @@ fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
-/// CPU 温度：sysinfo 温度组件（名含 CPU/Core 取均值）→ WMI 热区回退 → null
-#[tauri::command]
-pub async fn cpu_temp() -> Option<f64> {
+/// CPU 温度同步实现：sysinfo 温度组件（名含 CPU/Core 取均值）→ WMI 热区回退 → None
+/// 压测监控线程需要同步调用以做超温保护，故单独抽出。
+fn read_cpu_temp_sync() -> Option<f64> {
     // sysinfo（Windows 上支持有限，取不到则走 WMI）
     let comps = sysinfo::Components::new_with_refreshed_list();
     let vals: Vec<f64> = comps
@@ -1098,6 +1150,12 @@ pub async fn cpu_temp() -> Option<f64> {
     }
     let n = vals.len() as f64;
     Some(round1(vals.iter().sum::<f64>() / n))
+}
+
+/// CPU 温度
+#[tauri::command]
+pub async fn cpu_temp() -> Option<f64> {
+    read_cpu_temp_sync()
 }
 
 /// GPU 温度：nvidia-smi（PATH → System32 → NVSMI 安装目录），不可用返回 null
@@ -1209,7 +1267,7 @@ mod tests {
     use super::{
         cpu_arch_name, cpu_from_snapshot, cpu_vendor_name, disks_from_snapshot, form_factor_name,
         gpus_from_snapshot, is_virtual_gpu, map_storage_enum, mem_type_name, memory_from_snapshot,
-        parse_wmi_date, pick_vram_mb, vram_mb, DiskSpeed,
+        parse_wmi_date, pick_vram_mb, resolve_max_temp, vram_mb, DiskSpeed,
     };
     use serde_json::json;
 
@@ -1371,5 +1429,18 @@ mod tests {
         assert_eq!(v[0]["health"], "Healthy");
         assert_eq!(v[0]["serial"], "SN123");
         assert_eq!(v[0]["firmware"], "53006100");
+    }
+
+    #[test]
+    fn max_temp_setting_falls_back_to_safe_default() {
+        // 合法范围保留用户设置
+        assert_eq!(resolve_max_temp(85.0), 85.0);
+        assert_eq!(resolve_max_temp(50.0), 50.0);
+        assert_eq!(resolve_max_temp(110.0), 110.0);
+        // 未配置 / 过低 / 过高一律回退 95℃，避免「关掉保护」
+        assert_eq!(resolve_max_temp(0.0), 95.0);
+        assert_eq!(resolve_max_temp(-10.0), 95.0);
+        assert_eq!(resolve_max_temp(30.0), 95.0);
+        assert_eq!(resolve_max_temp(150.0), 95.0);
     }
 }

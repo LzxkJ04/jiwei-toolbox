@@ -5,6 +5,7 @@ import SideNav from "./components/SideNav.vue";
 import ToastHost from "./components/ui/ToastHost.vue";
 import ConfirmDialog from "./components/ui/ConfirmDialog.vue";
 import CommandPalette from "./components/CommandPalette.vue";
+import PermissionBanner from "./components/PermissionBanner.vue";
 import { useThemeStore } from "./stores/theme";
 import { useRouteStore } from "./stores/route";
 import { useFavoritesStore } from "./stores/favorites";
@@ -102,6 +103,8 @@ onMounted(async () => {
     <div class="flex min-h-0 flex-1">
       <SideNav />
       <main class="app-main">
+        <!-- 权限提示：普通权限常驻，管理员显示风险提醒 -->
+        <PermissionBanner v-if="route.active !== 'settings'" />
         <div :key="route.active" class="page-enter page-frame">
           <component :is="activeView" />
         </div>

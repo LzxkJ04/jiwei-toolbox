@@ -14,7 +14,7 @@ import Spinner from "../components/ui/Spinner.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import {
   cpuBurnStart, cpuBurnStop, cpuTemp, diskSmart, diskSpeed, gpuBurnStart, gpuBurnStop,
-  gpuTemp, hwInfo, hwUsage, memTestStart, onCpuLoad, onGpuLoad, onMemTestDone, onMemTestProgress,
+  gpuTemp, hwInfo, hwUsage, memTestStart, onCpuBurnEnd, onCpuLoad, onGpuLoad, onMemTestDone, onMemTestProgress,
   type DiskSmartInfo, type DiskSpeed, type HwDisk, type HwGpu, type HwInfo, type HwMemoryModule, type HwUsage, type MemTestResult,
 } from "../lib/tauri";
 import { copyText, formatBytes } from "../lib/utils";
@@ -226,11 +226,16 @@ async function copyReport() {
 const cpuDur = ref("60");
 const cpuRunning = ref(false);
 const cpuPct = ref(0);
+/** 压测中的实时温度与峰值，超温保护用 */
+const burnTemp = ref<number | null>(null);
+const burnPeak = ref(0);
 const cpuRemain = computed(() => Math.max(0, Math.ceil((Number(cpuDur.value) * (100 - cpuPct.value)) / 100)));
 
 async function cpuStart() {
   if (cpuRunning.value) return;
   cpuPct.value = 0;
+  burnTemp.value = null;
+  burnPeak.value = 0;
   cpuRunning.value = true;
   await cpuBurnStart(Number(cpuDur.value));
 }
@@ -460,7 +465,18 @@ onMounted(async () => {
   unlistens.push(
     await onCpuLoad((d) => {
       cpuPct.value = d.pct;
+      if (typeof d.temp === "number") burnTemp.value = d.temp;
+      if (typeof d.peak === "number") burnPeak.value = d.peak;
       if (d.pct >= 100) cpuRunning.value = false;
+    }),
+    await onCpuBurnEnd((d) => {
+      cpuRunning.value = false;
+      if (d.over_temp) {
+        toast(
+          `温度达到 ${d.limit}℃ 上限（峰值 ${d.peak}℃），压测已自动终止以保护硬件`,
+          "error"
+        );
+      }
     }),
     await onGpuLoad((d) => {
       if (d.error) {
@@ -771,6 +787,17 @@ onUnmounted(() => {
           <div class="mt-2 flex items-center justify-between gap-2 text-xs text-[var(--muted)]">
             <span>{{ cpuRunning ? "烤机进行中，请留意温度" : "多线程满载，到时自动停" }}</span>
             <span v-if="cpuRunning" class="font-mono font-semibold tabular-nums text-[var(--text)]">剩余 {{ fmtCountdown(cpuRemain) }}</span>
+          </div>
+          <!-- 超温保护状态 -->
+          <div v-if="cpuRunning || burnPeak > 0" class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+            <span :class="burnTemp !== null && burnTemp >= 85 ? 'text-[#e5484d]' : 'text-[var(--muted)]'">
+              当前 {{ burnTemp === null ? "—" : `${burnTemp}℃` }}
+            </span>
+            <span class="text-[var(--muted)]">·</span>
+            <span class="text-[var(--muted)]">峰值 {{ burnPeak > 0 ? `${burnPeak}℃` : "—" }}</span>
+            <span class="rounded-md bg-[#f5a623]/15 px-1.5 py-0.5 text-[10px] text-[#f5a623]">
+              超过设定上限将自动终止
+            </span>
           </div>
         </Card>
 

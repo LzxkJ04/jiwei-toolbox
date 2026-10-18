@@ -19,7 +19,6 @@ const open = ref(false);
 const keyword = ref("");
 const cursor = ref(0);
 const inputEl = ref<HTMLInputElement | null>(null);
-const listEl = ref<HTMLDivElement | null>(null);
 
 const route = useRouteStore();
 const theme = useThemeStore();
@@ -81,16 +80,6 @@ function closePanel() {
   open.value = false;
 }
 
-function move(delta: number) {
-  const n = shown.value.length;
-  if (!n) return;
-  cursor.value = (cursor.value + delta + n) % n;
-  void nextTick(() => {
-    const el = listEl.value?.querySelector<HTMLElement>(`[data-idx="${cursor.value}"]`);
-    el?.scrollIntoView({ block: "nearest" });
-  });
-}
-
 function execute(cmd?: Cmd) {
   const target = cmd ?? shown.value[cursor.value];
   if (!target) return;
@@ -99,25 +88,10 @@ function execute(cmd?: Cmd) {
 }
 
 function onKey(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-    e.preventDefault();
-    if (open.value) closePanel();
-    else openPanel();
-    return;
-  }
   if (!open.value) return;
   if (e.key === "Escape") {
     e.preventDefault();
     closePanel();
-  } else if (e.key === "ArrowDown") {
-    e.preventDefault();
-    move(1);
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    move(-1);
-  } else if (e.key === "Enter") {
-    e.preventDefault();
-    execute();
   }
 }
 
@@ -153,7 +127,7 @@ defineExpose({ openPanel });
         />
         <kbd class="shrink-0 rounded border border-[var(--card-border)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">Esc</kbd>
       </div>
-      <div ref="listEl" class="max-h-[52vh] overflow-y-auto p-1.5">
+      <div class="max-h-[52vh] overflow-y-auto p-1.5">
         <p v-if="!shown.length" class="px-3 py-8 text-center text-sm text-[var(--muted)]">没有匹配的命令</p>
         <button
           v-for="(c, i) in shown"
@@ -173,8 +147,8 @@ defineExpose({ openPanel });
         </button>
       </div>
       <div class="flex items-center justify-between border-t border-[var(--card-border)] px-4 py-2 text-[10px] text-[var(--muted)]">
-        <span>↑↓ 选择 · Enter 执行</span>
-        <span>Ctrl + K 随时呼出</span>
+        <span>点击条目执行</span>
+        <span>按 Esc 关闭</span>
       </div>
     </div>
   </div>
