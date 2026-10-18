@@ -551,6 +551,8 @@ export const hwUsage = () => invoke<HwUsage>("hw_usage").catch(() => null);
 export const sysUsage = () => invoke<SysUsage>("sys_usage").catch(() => null);
 export const listProcesses = () => tryCall<ProcRow[]>("list_processes");
 export const killPid = (pid: number) => invoke<null>("kill_pid", { pid });
+/** 结束整个进程树（含子进程），返回实际结束的进程数 */
+export const killProcessTree = (pid: number) => invoke<number>("kill_process_tree", { pid });
 export const netAdapters = () => tryCall<NetAdapter[]>("net_adapters");
 export const pingHost = (host: string) => invoke<PingResult>("ping_host", { host });
 export const dnsLookup = (host: string) => invoke<string[]>("dns_lookup", { host });
@@ -811,6 +813,9 @@ export const instChooseDir = () => tryCall<string>("inst_choose_dir");
 /** 系统文件选择框；取消返回空字符串 */
 export const chooseFile = (title: string, filterName = "", filterExt = "") =>
   invoke<string>("choose_file", { title, filterName, filterExt }).catch(() => "");
+/** 系统目录选择框，取消返回空字符串 */
+export const chooseDir = (title: string) =>
+  invoke<string>("choose_dir", { title }).catch(() => "");
 /** 查询路径所在盘剩余空间（字节；失败 0=未知） */
 export const instDiskFree = (path: string) => tryCall<number>("inst_disk_free", { path });
 /** 开始安装：WebView2 预装（按需）+ 拷贝程序文件 + 创建数据目录 + 静默安装逻辑包 */
@@ -947,3 +952,66 @@ export const prefetchIcons = (homepages: string[]) =>
 export const relaunchPortable = () => tryCall<null>("relaunch_portable");
 /** 修改缓存目录（log 派生），写回 dirs.json 并创建目录 */
 export const setCacheDir = (newCache: string) => tryCall<null>("set_cache_dir", { newCache });
+
+/* ============ 快捷命令工具箱 ============ */
+
+export interface PresetCmd {
+  id: string;
+  label: string;
+  desc: string;
+  /** 需要管理员权限 */
+  admin: boolean;
+  hint: string;
+}
+
+export interface CmdResult {
+  /** 退出码；-1 表示超时被终止 */
+  code: number;
+  stdout: string;
+  stderr: string;
+  elapsed_ms: number;
+  timed_out: boolean;
+  truncated: boolean;
+}
+
+export interface CustomCommand {
+  name: string;
+  command: string;
+  note?: string;
+}
+
+export const listPresetCommands = () => tryCall<PresetCmd[]>("list_preset_commands");
+export const runPresetCommand = (id: string) => invoke<CmdResult>("run_preset_command", { id });
+export const runCustomCommand = (command: string, timeoutSecs = 300) =>
+  invoke<CmdResult>("run_custom_command", { command, timeoutSecs });
+export const listCustomCommands = () => tryCall<CustomCommand[]>("list_custom_commands");
+export const saveCustomCommands = (items: CustomCommand[]) =>
+  tryCall<null>("save_custom_commands", { items });
+
+/* ============ 快捷方式清理 ============ */
+
+export interface ShortcutRow {
+  path: string;
+  name: string;
+  target: string;
+  location: string;
+  broken: boolean;
+  reason: string;
+  size: number;
+}
+
+export const scanShortcuts = () => tryCall<ShortcutRow[]>("scan_shortcuts");
+export const deleteShortcuts = (paths: string[]) =>
+  tryCall<number>("delete_shortcuts", { paths });
+
+/* ============ 系统信息导出 ============ */
+
+export interface ReportResult {
+  txt_file: string;
+  md_file: string;
+  app_count: number;
+  size: number;
+}
+
+export const exportSystemReport = (target?: string) =>
+  tryCall<ReportResult>("export_system_report", { target: target ?? null });

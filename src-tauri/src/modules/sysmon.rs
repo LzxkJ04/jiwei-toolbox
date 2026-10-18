@@ -218,6 +218,57 @@ pub async fn kill_pid(pid: u32) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
+/// 结束进程树：先递归收集子孙进程，再自底向上结束。
+/// 只结束当前进程的子树，不会碰父进程，避免误杀启动器/explorer。
+#[tauri::command]
+pub async fn kill_process_tree(pid: u32) -> Result<u32, String> {
+    if pid == 0 || pid == 4 {
+        return Err("系统进程不能结束".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        use sysinfo::{Pid, ProcessesToUpdate, System};
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+        let root = Pid::from_u32(pid);
+        if sys.process(root).is_none() {
+            return Err("进程已退出".to_string());
+        }
+
+        // 收集整棵子树（含自己）
+        let mut tree: Vec<Pid> = vec![root];
+        let mut i = 0;
+        while i < tree.len() {
+            let parent = tree[i];
+            for (child, p) in sys.processes() {
+                if p.parent() == Some(parent) && !tree.contains(child) {
+                    tree.push(*child);
+                }
+            }
+            i += 1;
+            // 防御性上限：异常进程树不该有上千个后代
+            if tree.len() > 2000 {
+                break;
+            }
+        }
+
+        // 先杀叶子，再杀父级，减少「父进程退出后子进程被重新拉起」的概率
+        let mut killed = 0u32;
+        for p in tree.iter().rev() {
+            if let Some(proc_item) = sys.process(*p) {
+                if proc_item.kill() {
+                    killed += 1;
+                }
+            }
+        }
+        if killed == 0 {
+            return Err("结束失败：权限不足或进程受保护".to_string());
+        }
+        Ok(killed)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ---------- 网络适配器 / 诊断 ----------
 
 fn ps_run(script: &str) -> String {

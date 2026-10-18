@@ -140,6 +140,23 @@ pub async fn choose_file(title: String, filter_name: String, filter_ext: String)
     .unwrap_or_default()
 }
 
+/// 弹出系统目录选择框，返回所选目录；取消返回空字符串。
+/// 报告导出、路径设置等场景用它，避免让用户手输路径。
+#[tauri::command]
+pub async fn choose_dir(title: String) -> String {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dlg = rfd::FileDialog::new();
+        if !title.trim().is_empty() {
+            dlg = dlg.set_title(&title);
+        }
+        dlg.pick_folder()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 // ---------- 设置存储（config\settings.json，UTF-8 无 BOM） ----------
 
 fn settings_file() -> PathBuf {

@@ -46,25 +46,18 @@ fn map_license_status(code: i64) -> &'static str {
     }
 }
 
-/// InstallDate 是 Unix 秒（可能为 0）
+/// InstallDate 是 Unix 秒（可能为 0）。
+/// 注册表存的是 UTC 秒，必须按本地时区换算，否则东八区会差一天
+/// （1740349499 是 UTC 2025-02-23 20:24，本地应是 2025-02-24）。
 fn format_install_date(ts: i64) -> String {
     if ts <= 0 {
         return String::new();
     }
-    const DAY: i64 = 86_400;
-    let days = ts.div_euclid(DAY);
-    // 复用 hardware 里的公历换算思路：Howard Hinnant civil_from_days
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = y + if m <= 2 { 1 } else { 0 };
-    format!("{y:04}-{m:02}-{d:02}")
+    use chrono::TimeZone;
+    match chrono::Local.timestamp_opt(ts, 0).single() {
+        Some(dt) => dt.format("%Y-%m-%d").to_string(),
+        None => String::new(),
+    }
 }
 
 /// 从注册表读取系统版本信息
@@ -102,6 +95,25 @@ fn read_os_info() -> (String, String, String, String, String, String) {
 /// 查询 Windows 许可证状态（只读，无任何写操作）
 #[tauri::command]
 pub async fn license_status() -> LicenseStatus {
+    // 内部要起 PowerShell，必须离开异步线程
+    tauri::async_runtime::spawn_blocking(license_status_sync)
+        .await
+        .unwrap_or_else(|_| LicenseStatus {
+            os_edition: String::new(),
+            os_version: String::new(),
+            status_text: "查询失败".into(),
+            partial_key: String::new(),
+            product_id: String::new(),
+            licensed: false,
+            build: String::new(),
+            channel: String::new(),
+            install_date: String::new(),
+            grace_minutes: 0,
+        })
+}
+
+/// 同步版本：供导出报告等内部调用。
+pub fn license_status_sync() -> LicenseStatus {
     let (os_edition, os_version, reg_product_id, build, channel, install_date) = read_os_info();
 
     // PowerShell CIM 查询：PartialProductKey 非空且属于 Windows 应用
@@ -219,7 +231,36 @@ mod tests {
         use super::format_install_date;
         assert_eq!(format_install_date(0), "");
         assert_eq!(format_install_date(-1), "");
-        // 2024-03-06 00:00:00 UTC
-        assert_eq!(format_install_date(1_709_683_200), "2024-03-06");
+        // 2024-03-06 00:00:00 UTC：东八区是当天 08:00，日期不变；西半球可能退到前一天。
+        // 所以这里按本地时区算期望值，不硬编码，避免测试随机器时区失败。
+        use chrono::TimeZone;
+        let expected = chrono::Local
+            .timestamp_opt(1_709_683_200, 0)
+            .single()
+            .unwrap()
+            .format("%Y-%m-%d")
+            .to_string();
+        assert_eq!(format_install_date(1_709_683_200), expected);
+    }
+
+    #[test]
+    fn install_date_uses_local_timezone() {
+        // 本机实测值：注册表存 1740349499（UTC 2025-02-23 20:24），
+        // 东八区应显示 2025-02-24。之前直接用 UTC 天数换算，少了一天。
+        use super::format_install_date;
+        use chrono::TimeZone;
+        let ts = 1_740_349_499i64;
+        let expected = chrono::Local
+            .timestamp_opt(ts, 0)
+            .single()
+            .unwrap()
+            .format("%Y-%m-%d")
+            .to_string();
+        assert_eq!(format_install_date(ts), expected);
+        // 换算结果必须落在 2025-02-23 或 24 之间，不能跑到别的日期
+        assert!(
+            expected == "2025-02-23" || expected == "2025-02-24",
+            "unexpected local date: {expected}"
+        );
     }
 }

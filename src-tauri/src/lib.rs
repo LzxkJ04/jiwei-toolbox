@@ -27,7 +27,7 @@ fn greet(name: &str) -> String {
     format!("你好, {}! 来自极维工具箱后端。", name)
 }
 
-use modules::{appicon, backup, cache, common, dirs, diskspace, drivers, hardware, inventory, license, logs, maintenance, netclient, software, sysmon, sysquick, systools, taskopts, templates, uninstall, updater, webview2};
+use modules::{appicon, backup, cache, common, dirs, diskspace, drivers, hardware, inventory, license, logs, maintenance, netclient, report, shellcmd, shortcuts, software, sysmon, sysquick, systools, taskopts, templates, uninstall, updater, webview2};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{MenuBuilder, MenuItem, PredefinedMenuItem},
@@ -200,6 +200,7 @@ pub fn run() {
             common::get_autostart,
             common::set_autostart,
             common::choose_file,
+            common::choose_dir,
             common::get_favorites,
             common::toggle_favorite,
             // 许可证状态（只读）
@@ -240,6 +241,7 @@ pub fn run() {
             sysmon::sys_usage,
             sysmon::list_processes,
             sysmon::kill_pid,
+            sysmon::kill_process_tree,
             sysmon::net_adapters,
             sysmon::ping_host,
             sysmon::dns_lookup,
@@ -272,6 +274,17 @@ pub fn run() {
             maintenance::uptime_info,
             maintenance::install_precheck,
             netclient::test_proxy,
+            // 快捷命令工具箱
+            shellcmd::list_preset_commands,
+            shellcmd::run_preset_command,
+            shellcmd::run_custom_command,
+            shellcmd::list_custom_commands,
+            shellcmd::save_custom_commands,
+            // 快捷方式清理
+            shortcuts::scan_shortcuts,
+            shortcuts::delete_shortcuts,
+            // 系统信息导出
+            report::export_system_report,
             // 系统工具
             systools::list_startup,
             systools::list_disabled_startup,

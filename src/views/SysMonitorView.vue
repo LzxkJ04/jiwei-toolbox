@@ -14,7 +14,7 @@ import EmptyState from "../components/ui/EmptyState.vue";
 import Dialog from "../components/ui/Dialog.vue";
 import ConfirmDialog from "../components/ui/ConfirmDialog.vue";
 import {
-  dnsLookup, emptyRecycleBin, flushDns, killPid, listPowerPlans, listProcesses, netAdapters,
+  dnsLookup, emptyRecycleBin, flushDns, killPid, killProcessTree, listPowerPlans, listProcesses, netAdapters,
   openPath, pingHost, setPowerPlan, sysUsage, uptimeInfo,
   type NetAdapter, type PingResult, type PowerPlan, type ProcRow, type SysUsage, type UptimeInfo,
 } from "../lib/tauri";
@@ -136,13 +136,20 @@ async function loadProcs() {
   procLoading.value = false;
 }
 
-async function endProcess(p: ProcRow) {
+async function endProcess(p: ProcRow, tree = false) {
   if (killing.value !== null) return;
   killing.value = p.pid;
   try {
-    await killPid(p.pid);
-    toast(`已结束 ${p.name}`, "success");
-    procs.value = procs.value.filter((x) => x.pid !== p.pid);
+    if (tree) {
+      const n = await killProcessTree(p.pid);
+      toast(`已结束 ${p.name} 及其子进程，共 ${n} 个`, "success");
+      // 子进程 PID 无法预知，结束后整表刷新一次
+      await loadProcs();
+    } else {
+      await killPid(p.pid);
+      toast(`已结束 ${p.name}`, "success");
+      procs.value = procs.value.filter((x) => x.pid !== p.pid);
+    }
   } catch (err) {
     toast(`结束失败：${String(err)}`, "error");
   } finally {
@@ -152,15 +159,19 @@ async function endProcess(p: ProcRow) {
 
 /* ---- 结束进程确认 ---- */
 const pendingKill = ref<ProcRow | null>(null);
+/** true = 连子进程一起结束 */
+const killTree = ref(false);
 
-function askKill(p: ProcRow) {
+function askKill(p: ProcRow, tree = false) {
+  killTree.value = tree;
   pendingKill.value = p;
 }
 
 async function confirmKill() {
   const p = pendingKill.value;
+  const tree = killTree.value;
   pendingKill.value = null;
-  if (p) await endProcess(p);
+  if (p) await endProcess(p, tree);
 }
 
 /* ---- 进程详情 ---- */
@@ -542,6 +553,15 @@ onUnmounted(() => {
                     <X v-else class="h-3 w-3" />
                     结束
                   </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    :disabled="killing !== null"
+                    title="结束该进程及其全部子进程"
+                    @click="askKill(p, true)"
+                  >
+                    含子进程
+                  </Button>
                 </td>
               </tr>
             </tbody>
@@ -746,8 +766,12 @@ onUnmounted(() => {
     <ConfirmDialog
       :open="!!pendingKill"
       title="结束这个进程？"
-      :message="pendingKill ? `将强制结束 ${pendingKill.name}（PID ${pendingKill.pid}）。未保存的数据可能丢失。` : ''"
-      confirm-text="结束进程"
+      :message="pendingKill
+        ? (killTree
+          ? `将结束 ${pendingKill.name}（PID ${pendingKill.pid}）以及它的全部子进程。子进程数量未知，未保存的数据可能丢失。`
+          : `将强制结束 ${pendingKill.name}（PID ${pendingKill.pid}）。未保存的数据可能丢失。`)
+        : ''"
+      :confirm-text="killTree ? '结束进程树' : '结束进程'"
       danger
       @update:open="(v) => !v && (pendingKill = null)"
       @confirm="confirmKill"

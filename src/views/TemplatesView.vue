@@ -22,6 +22,7 @@ import {
   type SoftwareItem, type TaskTemplate, type TemplateMeta,
 } from "../lib/tauri";
 import { useSoftwareStore } from "../stores/software";
+import { useTasksStore } from "../stores/tasks";
 import { useRouteStore } from "../stores/route";
 import { copyText } from "../lib/utils";
 import { toast } from "../lib/toast";
@@ -260,7 +261,6 @@ async function loadToQueue(name: string) {
   }
   loadingToQueue.value = true;
   try {
-    const { useTasksStore } = await import("../stores/tasks");
     const tasks = useTasksStore();
     await store.load();
     const catalog = store.items ?? [];

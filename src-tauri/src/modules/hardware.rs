@@ -578,6 +578,13 @@ fn cpu_from_snapshot(
 /// 硬件信息总览（CPU / 内存 / 主板 / BIOS / 显卡 / 磁盘 / 分区）
 #[tauri::command]
 pub async fn hw_info() -> serde_json::Value {
+    tauri::async_runtime::spawn_blocking(hw_info_sync)
+        .await
+        .unwrap_or_else(|_| json!({}))
+}
+
+/// 同步版本：供导出报告等内部调用，避免 async 里再 spawn。
+pub fn hw_info_sync() -> serde_json::Value {
     use sysinfo::System;
     let mut sys = System::new_all();
     sys.refresh_cpu_usage();

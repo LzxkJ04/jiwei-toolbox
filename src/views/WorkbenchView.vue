@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import {
-  Activity, Cpu, FolderOpen, HardDrive, LayoutTemplate, ListChecks, Loader2, Package,
-  Play, RefreshCw, ShieldCheck, Sparkles, Trash2, Wrench,
+  Activity, Cpu, FileSpreadsheet, FolderOpen, HardDrive, LayoutTemplate, ListChecks, Loader2,
+  Package, Play, RefreshCw, ShieldCheck, Sparkles, Terminal, Trash2, Wrench,
 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
@@ -120,6 +120,8 @@ const QUICK_TOOLS = [
   { id: "monitor", label: "系统监控", desc: "实时占用与进程", icon: Activity, page: "monitor" },
   { id: "systools", label: "系统工具", desc: "启动项 / 服务 / Hosts", icon: Wrench, page: "systools" },
   { id: "quicktools", label: "快捷工具", desc: "端口 / 系统入口 / 关机", icon: Sparkles, page: "quicktools" },
+  { id: "shellcmd", label: "快捷命令", desc: "SFC / DISM / 网络诊断", icon: Terminal, page: "shellcmd" },
+  { id: "report", label: "系统信息导出", desc: "整机报告一键导出", icon: FileSpreadsheet, page: "report" },
 ] as const;
 
 onMounted(refresh);

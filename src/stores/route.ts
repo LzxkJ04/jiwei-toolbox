@@ -1,7 +1,8 @@
 import { defineStore } from "pinia";
 import {
-  Activity, Archive, BadgeCheck, Database, FileText, Gauge, HardDrive, LayoutDashboard,
-  LayoutGrid, LayoutTemplate, ListChecks, Settings, Star, Wrench, Zap, type LucideIcon,
+  Activity, Archive, BadgeCheck, Database, FileSpreadsheet, FileText, Gauge, HardDrive,
+  LayoutDashboard, LayoutGrid, LayoutTemplate, Link2Off, ListChecks, Settings, Star,
+  Terminal, Wrench, Zap, type LucideIcon,
 } from "lucide-vue-next";
 
 export interface NavItem {
@@ -22,6 +23,9 @@ export type PageId =
   | "monitor"
   | "diskspace"
   | "quicktools"
+  | "shellcmd"
+  | "shortcuts"
+  | "report"
   | "systools"
   | "license"
   | "logs"
@@ -39,6 +43,9 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "monitor", label: "系统监控", icon: Activity },
   { id: "diskspace", label: "磁盘空间", icon: Database },
   { id: "quicktools", label: "快捷工具", icon: Zap },
+  { id: "shellcmd", label: "快捷命令", icon: Terminal },
+  { id: "shortcuts", label: "失效快捷方式", icon: Link2Off },
+  { id: "report", label: "系统信息导出", icon: FileSpreadsheet },
   { id: "systools", label: "系统工具", icon: Wrench },
   { id: "license", label: "许可证状态", icon: BadgeCheck },
   { id: "logs", label: "日志中心", icon: FileText },
