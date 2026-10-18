@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 use serde_json::json;
+use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -508,9 +509,322 @@ pub async fn flush_dns() -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// 解析 tracert 输出为逐跳数据。纯函数，便于测试。
+/// 注意：真实输出里数字与单位是分开的（`2 ms`，不是 `2ms`），
+/// 所以遇到 `ms`/`MS` 时要回看前一个词才是延迟值。
+fn parse_tracert(text: &str) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let t = line.trim_start();
+        // 必须先看数字，注释行与标题行没有行号
+        let Some((hop, rest)) = t.split_once(char::is_whitespace) else { continue };
+        let Ok(hop_num) = hop.parse::<u32>() else { continue };
+        let rest = rest.trim();
+        if rest.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        let mut delays: Vec<Option<f64>> = Vec::new();
+        let mut addr = String::new();
+        for (i, part) in parts.iter().enumerate() {
+            let low = part.to_ascii_lowercase();
+            if low == "ms" {
+                // 延迟值在单位前一个词
+                if i > 0 {
+                    let prev = parts[i - 1].trim_start_matches('<');
+                    if let Ok(v) = prev.parse::<f64>() {
+                        delays.push(Some(v));
+                        continue;
+                    }
+                }
+                delays.push(None);
+            } else if *part == "*" {
+                delays.push(None);
+            } else if low.ends_with("ms") {
+                // 兼容 "1ms" 紧贴写法
+                let num = low
+                    .trim_end_matches("ms")
+                    .trim_start_matches('<')
+                    .trim()
+                    .parse::<f64>()
+                    .ok();
+                delays.push(num);
+            } else if !part.is_empty()
+                && part.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ':')
+                && part.contains('.')
+            {
+                // 纯数字带点的是 IP；跳数本身已在前面取走
+                addr = part.to_string();
+            }
+        }
+
+        // 只保留前 3 个延迟值（tracert 默认发 3 个包）
+        delays.truncate(3);
+        let timeout = delays.iter().all(|d| d.is_none()) && addr.is_empty();
+        let vals: Vec<f64> = delays.iter().flatten().copied().collect();
+        let avg_ms = if vals.is_empty() {
+            0.0
+        } else {
+            (vals.iter().sum::<f64>() / vals.len() as f64 * 10.0).round() / 10.0
+        };
+        out.push(json!({
+            "hop": hop_num,
+            "addr": addr,
+            "delays": delays,
+            "timeout": timeout,
+            "avg_ms": avg_ms,
+        }));
+    }
+    out
+}
+
+/// 路由追踪。host 做字符白名单校验，防止拼进命令被注入。
+#[tauri::command]
+pub async fn trace_route(host: String, max_hops: u64) -> Result<Vec<serde_json::Value>, String> {
+    let host = host.trim().to_string();
+    if host.is_empty() {
+        return Err("请填写域名或 IP".into());
+    }
+    if !host
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '_'))
+    {
+        return Err("包含非法字符".into());
+    }
+    let hops = max_hops.clamp(1, 30);
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::os::windows::process::CommandExt;
+        // -d 不解析主机名、-w 800ms 超时、-h 跳数上限，整体更快
+        let out = std::process::Command::new("tracert")
+            .args(["-d", "-w", "800", "-h", &hops.to_string(), &host])
+            .creation_flags(0x0800_0000)
+            .output()
+            .map_err(|e| format!("无法执行 tracert: {e}"))?;
+        let bytes = out.stdout;
+        let bytes = if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+            &bytes[2..]
+        } else {
+            &bytes[..]
+        };
+        // 中文系统 tracert 输出是 GBK，先试 UTF-8 再回落
+        let text = match std::str::from_utf8(bytes) {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                let (t, _, _) = encoding_rs::GBK.decode(bytes);
+                t.into_owned()
+            }
+        };
+        let list = parse_tracert(&text);
+        if list.is_empty() {
+            return Err("没有解析到任何跳。目标可能不可达。".to_string());
+        }
+        Ok(list)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 局域网设备扫描结果
+#[derive(Serialize)]
+pub struct LanDevice {
+    pub ip: String,
+    pub mac: String,
+    /// 解析到的主机名，取不到为空
+    pub hostname: String,
+    /// 是否本机
+    pub is_self: bool,
+}
+
+/// 解析 arp -a 输出。纯函数，便于测试。
+/// 只保留合法 IPv4 + 有效 MAC，剔除广播/组播/链路本地（169.254.*）。
+fn parse_arp(text: &str) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let ip = parts[0];
+        let mac = parts[1].replace('-', ":");
+        if !ip.chars().all(|c| c.is_ascii_digit() || c == '.') || ip.matches('.').count() != 3 {
+            continue;
+        }
+        // MAC 必须是 6 段十六进制
+        let mac_parts: Vec<&str> = mac.split(':').collect();
+        if mac_parts.len() != 6 || !mac_parts.iter().all(|s| s.len() == 2 && s.chars().all(|c| c.is_ascii_hexdigit())) {
+            continue;
+        }
+        if mac == "ff:ff:ff:ff:ff:ff" {
+            continue;
+        }
+        if ip.ends_with(".255") || ip.starts_with("224.") || ip.starts_with("239.") || ip.ends_with(".0") {
+            continue;
+        }
+        // 169.254.x.x 是链路本地地址：网卡没拿到 DHCP 会堆积几百条陈旧记录，
+        // 不代表有真实设备在线，必须剔除，否则列表会被垃圾数据刷满。
+        if ip.starts_with("169.254.") {
+            continue;
+        }
+        rows.push((ip.to_string(), mac.to_ascii_uppercase()));
+    }
+    rows.sort_by(|a, b| {
+        // 按 IP 数值排序，让 192.168.1.2 排在 192.168.1.10 前面
+        let key = |s: &str| -> u32 {
+            let mut v = 0u32;
+            for p in s.split('.') {
+                v = v.saturating_mul(256).saturating_add(p.parse::<u32>().unwrap_or(0));
+            }
+            v
+        };
+        key(&a.0).cmp(&key(&b.0))
+    });
+    rows
+}
+
+/// 扫描本局域网在线设备（ARP 表 + 并发 ping 激活）。
+/// 只读取本机 ARP 缓存，不主动对网段做暴力扫描，避免触发防火墙告警。
+#[tauri::command]
+pub async fn scan_lan_devices() -> Vec<LanDevice> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let read_arp = || {
+            let out = std::process::Command::new("arp")
+                .args(["-a"])
+                .creation_flags(0x0800_0000)
+                .output();
+            let Ok(o) = out else { return Vec::new() };
+            let bytes = o.stdout;
+            let text = match std::str::from_utf8(&bytes) {
+                Ok(s) => s.to_string(),
+                Err(_) => {
+                    let (t, _, _) = encoding_rs::GBK.decode(&bytes);
+                    t.into_owned()
+                }
+            };
+            parse_arp(&text)
+        };
+
+        let locals = local_ipv4_list();
+        let self_ip = locals.first().cloned().unwrap_or_default();
+        let mut rows = read_arp();
+        // ARP 表可能是空的（刚开机），先 ping 网关激活一下再读一次
+        if rows.is_empty() {
+            let gateway = self_ip
+                .rsplit_once('.')
+                .map(|(head, _)| format!("{head}.1"))
+                .unwrap_or_else(|| "192.168.1.1".to_string());
+            let _ = std::process::Command::new("ping")
+                .args(["-n", "1", "-w", "600", &gateway])
+                .creation_flags(0x0800_0000)
+                .output();
+            rows = read_arp();
+        }
+
+        same_subnet(rows, &locals)
+            .into_iter()
+            .map(|(ip, mac)| {
+                let is_self = locals.iter().any(|l| l == &ip);
+                LanDevice {
+                    hostname: if is_self { "本机".to_string() } else { String::new() },
+                    ip,
+                    mac,
+                    is_self,
+                }
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// 取本机所有 IPv4 地址（含多网卡）。
+fn local_ipv4_list() -> Vec<String> {
+    let mut out = Vec::new();
+    // 主出口 IP：连一个外部地址不会真的发包，只让系统选路
+    use std::net::UdpSocket;
+    if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
+        if sock.connect("8.8.8.8:80").is_ok() {
+            if let Ok(addr) = sock.local_addr() {
+                out.push(addr.ip().to_string());
+            }
+        }
+    }
+    // 其余网卡从 ipconfig 补全，多网卡时才能覆盖全部网段
+    let out_cmd = std::process::Command::new("ipconfig")
+        .creation_flags(0x0800_0000)
+        .output();
+    if let Ok(o) = out_cmd {
+        let bytes = o.stdout;
+        let text = match std::str::from_utf8(&bytes) {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                let (t, _, _) = encoding_rs::GBK.decode(&bytes);
+                t.into_owned()
+            }
+        };
+        for line in text.lines() {
+            if !line.contains("IPv4") {
+                continue;
+            }
+            if let Some(idx) = line.find(':') {
+                let candidate = line[idx + 1..].trim();
+                if candidate.matches('.').count() == 3
+                    && candidate.chars().all(|c| c.is_ascii_digit() || c == '.')
+                    && !candidate.starts_with("127.")
+                    && !candidate.starts_with("169.254.")
+                {
+                    out.push(candidate.to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// 把 IP 归到 /24 网段键（前三段）
+fn subnet_of(ip: &str) -> String {
+    let mut it = ip.split('.');
+    match (it.next(), it.next(), it.next()) {
+        (Some(a), Some(b), Some(c)) => format!("{a}.{b}.{c}"),
+        _ => String::new(),
+    }
+}
+
+/// 只保留与本机主出口处在同一 /24 网段的 ARP 条目。
+/// 实测本机 ARP 表会跨 8 个网段、580+ 条记录（代理软件 / 虚拟机造成），
+/// 全量展示等于刷屏，而那些网段并不是用户理解的「局域网」。
+/// 多网卡时优先用 primary（主出口 IP），取不到才退回全部网卡。
+fn same_subnet(rows: Vec<(String, String)>, locals: &[String]) -> Vec<(String, String)> {
+    let nets: Vec<String> = locals
+        .iter()
+        .map(|ip| subnet_of(ip))
+        .filter(|s| !s.is_empty())
+        .collect();
+    if nets.is_empty() {
+        return rows;
+    }
+    // 主出口网段优先：只保留它，避免把代理虚拟网段（192.168.9.x 之类）当作局域网
+    let primary = nets.first().cloned().unwrap_or_default();
+    let kept: Vec<(String, String)> = rows
+        .iter()
+        .filter(|(ip, _)| subnet_of(ip) == primary)
+        .cloned()
+        .collect();
+    // 主网段一条都没有时说明选路判断失败，退回全部本机网段
+    if kept.is_empty() {
+        return rows
+            .into_iter()
+            .filter(|(ip, _)| nets.contains(&subnet_of(ip)))
+            .collect();
+    }
+    kept
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{as_array, collect_processes, collect_usage, ps_json};
+    use super::{as_array, collect_processes, collect_usage, parse_tracert, ps_json};
     use serde_json::json;
 
     #[test]
@@ -555,5 +869,165 @@ ConvertTo-Json -InputObject @(@{ alias = 'x'; ipv4 = '1.2.3.4' }) -Compress
 
         let dns = r#"ConvertTo-Json -InputObject @(@('1.2.3.4')) -Compress"#;
         println!("dns = {:?}", ps_json(dns));
+    }
+
+    #[test]
+    fn tracert_output_is_parsed() {
+        // 真实 tracert -d 输出片段（英文系统）
+        let text = r#"
+Tracing route to 8.8.8.8 over a maximum of 30 hops
+
+  1     2 ms     1 ms     1 ms  192.168.1.1
+  2     *        *        *     Request timed out.
+  3    12 ms    11 ms    13 ms  10.10.0.1
+  4     8 ms     9 ms     8 ms  8.8.8.8
+
+Trace complete.
+"#;
+        let hops = parse_tracert(text);
+        assert_eq!(hops.len(), 4);
+        assert_eq!(hops[0]["hop"], 1);
+        assert_eq!(hops[0]["addr"], "192.168.1.1");
+        assert_eq!(hops[0]["avg_ms"], 1.3);
+        // 超时跳没有地址，avg 为 0
+        assert_eq!(hops[1]["addr"], "");
+        assert_eq!(hops[1]["avg_ms"], 0.0);
+        assert_eq!(hops[1]["timeout"], true);
+        assert_eq!(hops[3]["addr"], "8.8.8.8");
+    }
+
+    #[test]
+    fn tracert_sub_ms_delay_parsed() {
+        // "<1 ms" 形式要能解析
+        let text = "  1    <1 ms    <1 ms    <1 ms  192.168.0.1\n";
+        let hops = parse_tracert(text);
+        assert_eq!(hops.len(), 1);
+        assert_eq!(hops[0]["addr"], "192.168.0.1");
+        assert_eq!(hops[0]["avg_ms"], 1.0);
+    }
+
+    #[test]
+    fn tracert_garbage_yields_nothing() {
+        // 空输出 / 报错文本不能崩，也不能造出假跳
+        assert!(parse_tracert("").is_empty());
+        assert!(parse_tracert("Unable to resolve target system name.").is_empty());
+        assert!(parse_tracert("Trace complete.").is_empty());
+    }
+
+    #[test]
+    fn arp_parsing_filters_junk() {
+        // 真实 arp -a 输出（含网关、动态/静态条目、广播行）
+        let text = r#"
+Interface: 192.168.1.100 --- 0x5
+  Internet Address      Physical Address      Type
+  192.168.1.1           00-11-22-33-44-55     dynamic
+  192.168.1.10          00-11-22-33-44-66     dynamic
+  192.168.1.255         ff-ff-ff-ff-ff-ff     static
+  224.0.0.22            01-00-5e-00-00-16     static
+  169.254.24.21         00-e0-97-27-00-48     dynamic
+  239.255.255.250       01-00-5e-7f-ff-fa     static
+"#;
+        let rows = super::parse_arp(text);
+        // 只应剩下 192.168.1.1 与 192.168.1.10，且按 IP 数值升序
+        assert_eq!(rows.len(), 2, "实际解析出 {:?}", rows);
+        assert_eq!(rows[0].0, "192.168.1.1");
+        assert_eq!(rows[0].1, "00:11:22:33:44:55");
+        assert_eq!(rows[1].0, "192.168.1.10");
+    }
+
+    #[test]
+    fn arp_link_local_is_dropped() {
+        // 网卡没拿到 DHCP 时会堆积几百条 169.254，必须全部剔除
+        let text = "  169.254.1.1   AA-BB-CC-DD-EE-FF   dynamic\n  169.254.2.2   AA-BB-CC-DD-EE-01   dynamic\n";
+        assert!(super::parse_arp(text).is_empty());
+    }
+
+    #[test]
+    fn arp_sorts_numerically() {
+        // 字符串排序会把 .10 排到 .2 前面，必须按数值
+        let text = "  10.0.0.10   AA-BB-CC-DD-EE-01   dynamic\n  10.0.0.2   AA-BB-CC-DD-EE-02   dynamic\n";
+        let rows = super::parse_arp(text);
+        assert_eq!(rows[0].0, "10.0.0.2");
+        assert_eq!(rows[1].0, "10.0.0.10");
+    }
+
+    #[test]
+    fn subnet_filter_keeps_only_local_network() {
+        // 本机 ARP 表实测跨 8 个网段、580+ 条，全量展示等于刷屏
+        let rows = vec![
+            ("192.168.8.2".to_string(), "AA:AA:AA:AA:AA:01".to_string()),
+            ("192.168.8.3".to_string(), "AA:AA:AA:AA:AA:02".to_string()),
+            ("192.168.9.5".to_string(), "AA:AA:AA:AA:AA:03".to_string()),
+            ("10.0.0.7".to_string(), "AA:AA:AA:AA:AA:04".to_string()),
+        ];
+        let kept = super::same_subnet(rows, &["192.168.8.100".to_string()]);
+        assert_eq!(kept.len(), 2, "只应保留 192.168.8.x");
+        assert!(kept.iter().all(|(ip, _)| ip.starts_with("192.168.8.")));
+    }
+
+    #[test]
+    fn subnet_filter_prefers_primary_network() {
+        // 多网卡时只取主出口网段，否则会把代理虚拟网段当成局域网
+        let rows = vec![
+            ("192.168.9.5".to_string(), "AA:AA:AA:AA:AA:03".to_string()),
+            ("192.168.8.2".to_string(), "AA:AA:AA:AA:AA:01".to_string()),
+        ];
+        let kept = super::same_subnet(
+            rows,
+            &["192.168.8.100".to_string(), "192.168.9.100".to_string()],
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].0, "192.168.8.2");
+    }
+
+    #[test]
+    fn subnet_filter_falls_back_when_primary_empty() {
+        // 主网段没有条目（选路判断失败）时应退回全部本机网段，而不是返回空
+        let rows = vec![("192.168.9.5".to_string(), "AA:AA:AA:AA:AA:03".to_string())];
+        let kept = super::same_subnet(
+            rows,
+            &["192.168.8.100".to_string(), "192.168.9.100".to_string()],
+        );
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn subnet_filter_without_local_ip_keeps_all() {
+        // 拿不到本机 IP 时不能把结果全丢掉，否则界面永远空白
+        let rows = vec![("1.2.3.4".to_string(), "AA:AA:AA:AA:AA:01".to_string())];
+        assert_eq!(super::same_subnet(rows.clone(), &[]).len(), 1);
+        assert_eq!(super::same_subnet(rows, &["".to_string()]).len(), 1);
+    }
+
+    #[test]
+    fn subnet_key_takes_three_octets() {
+        assert_eq!(super::subnet_of("192.168.8.123"), "192.168.8");
+        assert_eq!(super::subnet_of("10.0.0.1"), "10.0.0");
+        assert_eq!(super::subnet_of(""), "");
+        // 段数不足时不该 panic
+        assert_eq!(super::subnet_of("1.2"), "");
+    }
+
+    /// 现场探针：真跑一次 tracert + 局域网扫描。
+    /// `cargo test --lib live_trace_and_lan -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn live_trace_and_lan() {
+        let hops = tauri::async_runtime::block_on(super::trace_route("223.5.5.5".into(), 12))
+            .expect("tracert 应该能执行");
+        println!("hops={}", hops.len());
+        for h in hops.iter().take(10) {
+            println!(
+                "  {}  {}  avg={}ms  timeout={}",
+                h["hop"], h["addr"], h["avg_ms"], h["timeout"]
+            );
+        }
+        assert!(!hops.is_empty(), "应该至少解析到一跳");
+
+        let lan = tauri::async_runtime::block_on(super::scan_lan_devices());
+        println!("lan devices={}", lan.len());
+        for d in lan.iter().take(10) {
+            println!("  {}  {}  {}", d.ip, d.mac, d.hostname);
+        }
     }
 }

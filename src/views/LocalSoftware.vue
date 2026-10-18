@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import {
   ArrowDownWideNarrow, CheckCircle2, Copy, Database, Download, ExternalLink, FolderOpen,
-  Loader2, ListChecks, PlayCircle, RefreshCw, Search, Trash2, XCircle, Zap,
+  Loader2, ListChecks, PlayCircle, RefreshCw, Search, ShieldCheck, Trash2, XCircle, Zap,
 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Button from "../components/ui/Button.vue";
@@ -15,7 +15,7 @@ import Spinner from "../components/ui/Spinner.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
 import type { InstalledApp, ResidualItem, UwpApp } from "../lib/tauri";
 import {
-  listInstalled, listUwp, measureAppSizes, openPath, removeResidual, removeUwp, runUninstaller,
+  listInstalledVisible, listUwp, measureAppSizes, openPath, removeResidual, removeUwp, runUninstaller,
   scanResidual, processRunning, killProcess,
 } from "../lib/tauri";
 import { copyText, formatBytes } from "../lib/utils";
@@ -25,12 +25,18 @@ import { toast } from "../lib/toast";
 
 const apps = ref<InstalledApp[] | null>(null);
 const uwpApps = ref<UwpApp[] | null>(null);
+/** 被卸载黑名单隐藏的软件数量与名称（提示用户，避免误以为扫描漏了） */
+const hiddenCount = ref(0);
+const hiddenNames = ref<string[]>([]);
+const showHidden = ref(false);
 const refreshing = ref(false);
 
 async function refresh() {
   refreshing.value = true;
-  const [a, u] = await Promise.all([listInstalled(), listUwp()]);
-  apps.value = a ?? [];
+  const [visible, u] = await Promise.all([listInstalledVisible(), listUwp()]);
+  apps.value = visible?.apps ?? [];
+  hiddenCount.value = visible?.hidden_count ?? 0;
+  hiddenNames.value = (visible?.hidden_names ?? []).map((h) => h.name);
   uwpApps.value = u ?? [];
   refreshing.value = false;
   // 后台补算体积：EstimatedSize 为 0 的软件按安装目录实测
@@ -487,6 +493,32 @@ function clearQueue() {
         <Loader2 class="h-3 w-3 animate-spin" /> 正在实测体积…
       </span>
       <span v-else-if="measuredCount" class="text-[#30a46c]">已实测补全 {{ measuredCount }} 个软件体积</span>
+      <button
+        v-if="hiddenCount > 0"
+        type="button"
+        class="flex items-center gap-1 text-[#30a46c] transition-colors hover:underline"
+        title="被卸载黑名单隐藏的软件不会出现在列表中，也就无法被卸载"
+        @click="showHidden = !showHidden"
+      >
+        <ShieldCheck class="h-3 w-3" />
+        已保护 {{ hiddenCount }} 个
+      </button>
+    </div>
+
+    <!-- 被保护的软件明细 -->
+    <div
+      v-if="hiddenCount > 0 && showHidden"
+      class="mb-3 rounded-xl border border-[#30a46c33] bg-[#30a46c0d] p-3 text-xs"
+    >
+      <p class="mb-1.5 font-medium text-[#30a46c]">
+        以下 {{ hiddenCount }} 个软件被黑白名单保护，不会出现在列表中：
+      </p>
+      <p class="leading-relaxed text-[var(--muted)]">
+        {{ hiddenNames.join("、") }}<span v-if="hiddenCount > hiddenNames.length">…等</span>
+      </p>
+      <p class="mt-1.5 text-[10px] text-[var(--muted)]">
+        如需解除保护，请到「黑白名单」页面调整规则。
+      </p>
     </div>
 
     <!-- 顶部栏：搜索 + 筛选 + 刷新 -->

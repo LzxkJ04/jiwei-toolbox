@@ -149,10 +149,43 @@ pub(crate) fn list_installed_inner() -> Vec<InstalledApp> {
     out
 }
 
+/// 按卸载黑名单过滤后的已安装列表。
+/// 命中的软件不会返回给界面，也就无法被选中卸载——这是防误删的核心一层。
+fn split_by_blacklist(all: Vec<InstalledApp>) -> (Vec<InstalledApp>, Vec<InstalledApp>) {
+    // 先取一次规则，避免每个软件都重新读配置
+    let set = crate::modules::filter::get_filter_rules();
+    all.into_iter().partition(|a| {
+        !set.uninstall
+            .iter()
+            .any(|r| crate::modules::filter::rule_hits(r, &a.name, &a.install_location))
+    })
+}
+
 /// Tauri 命令入口（线程池执行，避免阻塞主线程）
 #[tauri::command]
 pub async fn list_installed() -> Vec<InstalledApp> {
     list_installed_inner()
+}
+
+/// 带黑名单过滤的列表，界面用这个
+#[tauri::command]
+pub async fn list_installed_visible() -> serde_json::Value {
+    tauri::async_runtime::spawn_blocking(|| {
+        let (kept, hidden) = split_by_blacklist(list_installed_inner());
+        // 告知界面隐藏了多少个，而不是悄悄少几条，用户会以为是扫描漏了
+        let hidden_items: Vec<serde_json::Value> = hidden
+            .iter()
+            .take(50)
+            .map(|a| serde_json::json!({ "name": a.name }))
+            .collect();
+        serde_json::json!({
+            "apps": kept,
+            "hidden_count": hidden.len(),
+            "hidden_names": hidden_items,
+        })
+    })
+    .await
+    .unwrap_or_else(|_| serde_json::json!({ "apps": [], "hidden_count": 0, "hidden_names": [] }))
 }
 
 

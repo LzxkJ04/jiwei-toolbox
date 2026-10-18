@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import {
   Activity, Archive, BadgeCheck, Database, FileSpreadsheet, FileText, Gauge, HardDrive,
-  LayoutDashboard, LayoutGrid, LayoutTemplate, Link2Off, ListChecks, Settings, Star,
+  LayoutDashboard, LayoutGrid, LayoutTemplate, Link2Off, ListChecks, Settings, ShieldBan, Star,
   Terminal, Wrench, Zap, type LucideIcon,
 } from "lucide-vue-next";
 
@@ -16,6 +16,7 @@ export type PageId =
   | "library"
   | "favorites"
   | "local"
+  | "filter"
   | "tasks"
   | "templates"
   | "backup"
@@ -36,6 +37,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "library", label: "软件库", icon: LayoutGrid },
   { id: "favorites", label: "我的收藏", icon: Star },
   { id: "local", label: "本机软件", icon: HardDrive },
+  { id: "filter", label: "黑白名单", icon: ShieldBan },
   { id: "tasks", label: "任务队列", icon: ListChecks },
   { id: "templates", label: "任务模板", icon: LayoutTemplate },
   { id: "backup", label: "软件备份", icon: Archive },

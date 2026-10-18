@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { ListChecks, ListFilter, Search } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Button from "../components/ui/Button.vue";
@@ -10,7 +10,8 @@ import EmptyState from "../components/ui/EmptyState.vue";
 import Dialog from "../components/ui/Dialog.vue";
 import SoftwareCard from "../components/SoftwareCard.vue";
 import SoftwareDetailDialog from "../components/SoftwareDetailDialog.vue";
-import type { SoftwareItem } from "../lib/tauri";
+import type { FilterRule, SoftwareItem } from "../lib/tauri";
+import { getFilterRules } from "../lib/tauri";
 import { useSoftwareStore } from "../stores/software";
 import { useFavoritesStore } from "../stores/favorites";
 import { useTasksStore } from "../stores/tasks";
@@ -48,8 +49,34 @@ const filterOptions = [
   { value: "open-free", label: "开源免费" },
 ];
 
+/* ---- 下载过滤黑名单 ---- */
+const downloadRules = ref<FilterRule[]>([]);
+const hiddenIds = computed(() => {
+  const active = downloadRules.value.filter((r) => r.enabled);
+  const ids = new Set<string>();
+  if (active.length === 0) return ids;
+  for (const item of store.items ?? []) {
+    const hit = active.some((r) => {
+      const kw = r.keyword.trim().toLowerCase();
+      if (!kw) return false;
+      // kind=name 匹配软件名，kind=path 匹配分类
+      const hay = (r.kind === "path" ? item.category : item.name) ?? "";
+      return hay.toLowerCase().includes(kw);
+    });
+    if (hit) ids.add(item.id);
+  }
+  return ids;
+});
+
+async function loadRules() {
+  const res = await getFilterRules();
+  downloadRules.value = res?.download ?? [];
+}
+
 const visible = computed(() => {
   let list = store.items ?? [];
+  // 下载过滤：命中的软件直接不展示，无法加入队列
+  if (hiddenIds.value.size > 0) list = list.filter((i) => !hiddenIds.value.has(i.id));
   if (category.value !== "全部") list = list.filter((i) => i.category === category.value);
   const q = search.value.trim().toLowerCase();
   if (q) {
@@ -169,6 +196,9 @@ function importList(e: Event) {
   };
   reader.readAsText(file);
 }
+
+// 软件库首次进入时读一次下载过滤规则
+onMounted(loadRules);
 </script>
 
 <template>
@@ -203,6 +233,9 @@ function importList(e: Event) {
     </div>
     <p class="mb-4 text-xs text-[var(--muted)]">
       {{ visible.length }} 个软件<template v-if="visibleSize > 0"> · 安装包合计约 {{ visibleSize }} MB</template>
+      <span v-if="hiddenIds.size > 0" class="text-[var(--muted)]">
+        · <span class="text-[#30a46c]">已按黑白名单隐藏 {{ hiddenIds.size }} 个</span>
+      </span>
     </p>
 
     <!-- 软件卡片网格 -->

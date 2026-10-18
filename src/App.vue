@@ -31,6 +31,7 @@ import QuickToolsView from "./views/QuickToolsView.vue";
 import ShellCmdView from "./views/ShellCmdView.vue";
 import ShortcutsView from "./views/ShortcutsView.vue";
 import ReportView from "./views/ReportView.vue";
+import FilterRulesView from "./views/FilterRulesView.vue";
 import SysToolsView from "./views/SysToolsView.vue";
 import LicenseView from "./views/LicenseView.vue";
 import LogsView from "./views/LogsView.vue";
@@ -57,6 +58,7 @@ const views: Record<string, unknown> = {
   shellcmd: ShellCmdView,
   shortcuts: ShortcutsView,
   report: ReportView,
+  filter: FilterRulesView,
   systools: SysToolsView,
   license: LicenseView,
   logs: LogsView,

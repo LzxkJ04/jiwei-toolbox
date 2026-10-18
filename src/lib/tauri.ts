@@ -1015,3 +1015,55 @@ export interface ReportResult {
 
 export const exportSystemReport = (target?: string) =>
   tryCall<ReportResult>("export_system_report", { target: target ?? null });
+
+/* ============ 黑白名单 ============ */
+
+export interface FilterRule {
+  keyword: string;
+  /** "name" | "path" */
+  kind: string;
+  note?: string;
+  enabled: boolean;
+  /** 内置保护项：不可删除、不可禁用 */
+  builtin: boolean;
+}
+
+export interface RuleSet {
+  uninstall: FilterRule[];
+  download: FilterRule[];
+}
+
+export const getFilterRules = () => tryCall<RuleSet>("get_filter_rules");
+export const saveFilterRules = (uninstall: FilterRule[], download: FilterRule[]) =>
+  tryCall<null>("save_filter_rules", { uninstall, download });
+export const resetFilterRules = () => tryCall<null>("reset_filter_rules");
+
+/** 带黑名单过滤的已安装软件列表 */
+export interface VisibleApps {
+  apps: InstalledApp[];
+  hidden_count: number;
+  hidden_names: { name: string }[];
+}
+export const listInstalledVisible = () => invoke<VisibleApps>("list_installed_visible");
+
+/* ============ 网络工具箱：路由追踪 / 局域网设备 ============ */
+
+export interface TraceHop {
+  hop: number;
+  addr: string;
+  /** 三次探测的延迟，null 表示该次超时 */
+  delays: (number | null)[];
+  timeout: boolean;
+  avg_ms: number;
+}
+
+export interface LanDevice {
+  ip: string;
+  mac: string;
+  hostname: string;
+  is_self: boolean;
+}
+
+export const traceRoute = (host: string, maxHops = 20) =>
+  invoke<TraceHop[]>("trace_route", { host, maxHops });
+export const scanLanDevices = () => tryCall<LanDevice[]>("scan_lan_devices");

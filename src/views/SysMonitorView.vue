@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import {
-  Activity, ArrowDown, ArrowUp, Clock, Cpu, FolderOpen, Globe, Info, Loader2, MemoryStick,
-  Network, RefreshCw, Search, Server, Trash2, X, Zap,
+  Activity, ArrowDown, ArrowUp, Clock, Copy, Cpu, FolderOpen, Globe, Info, Loader2,
+  MemoryStick, Monitor, Network, RefreshCw, Route, Search, Server, Trash2, X, Zap,
 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
@@ -14,9 +14,11 @@ import EmptyState from "../components/ui/EmptyState.vue";
 import Dialog from "../components/ui/Dialog.vue";
 import ConfirmDialog from "../components/ui/ConfirmDialog.vue";
 import {
-  dnsLookup, emptyRecycleBin, flushDns, killPid, killProcessTree, listPowerPlans, listProcesses, netAdapters,
+  dnsLookup, emptyRecycleBin, flushDns, killPid, killProcessTree, listPowerPlans, listProcesses,
+  netAdapters, scanLanDevices, traceRoute,
   openPath, pingHost, setPowerPlan, sysUsage, uptimeInfo,
-  type NetAdapter, type PingResult, type PowerPlan, type ProcRow, type SysUsage, type UptimeInfo,
+  type LanDevice, type NetAdapter, type PingResult, type PowerPlan, type ProcRow, type SysUsage,
+  type TraceHop, type UptimeInfo,
 } from "../lib/tauri";
 import { copyText, formatBytes } from "../lib/utils";
 import { toast } from "../lib/toast";
@@ -258,6 +260,49 @@ async function doFlush() {
   } finally {
     flushLoading.value = false;
   }
+}
+
+/* ---- 路由追踪 ---- */
+const traceHost = ref("www.baidu.com");
+const traceHops = ref<TraceHop[] | null>(null);
+const traceLoading = ref(false);
+
+async function doTrace() {
+  if (traceLoading.value) return;
+  traceHops.value = null;
+  traceLoading.value = true;
+  try {
+    traceHops.value = await traceRoute(traceHost.value, 20);
+  } catch (err) {
+    toast(`追踪失败：${String(err)}`, "error");
+  } finally {
+    traceLoading.value = false;
+  }
+}
+
+/* ---- 局域网设备 ---- */
+const lanDevices = ref<LanDevice[]>([]);
+const lanLoading = ref(false);
+
+async function doScanLan() {
+  if (lanLoading.value) return;
+  lanLoading.value = true;
+  try {
+    lanDevices.value = (await scanLanDevices()) ?? [];
+    if (lanDevices.value.length === 0) toast("没有读到局域网设备，可能 ARP 表为空", "info");
+  } catch (err) {
+    toast(`扫描失败：${String(err)}`, "error");
+  } finally {
+    lanLoading.value = false;
+  }
+}
+
+async function copyLan() {
+  const text = lanDevices.value
+    .map((d) => `${d.ip}\t${d.mac}\t${d.hostname || ""}`)
+    .join("\n");
+  const ok = await copyText(text);
+  toast(ok ? `已复制 ${lanDevices.value.length} 条` : "复制失败", ok ? "success" : "error");
 }
 
 function uptimeText(sec?: number) {
@@ -657,6 +702,99 @@ onUnmounted(() => {
           </div>
         </Card>
       </div>
+
+      <!-- 路由追踪 -->
+      <Card class="p-4">
+        <p class="mb-3 flex items-center gap-2 text-sm font-semibold">
+          <Route class="h-4 w-4 text-[var(--primary)]" /> 路由追踪
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <Input v-model="traceHost" placeholder="域名或 IP" class="min-w-0 flex-1" />
+          <Button variant="primary" size="sm" :disabled="traceLoading" @click="doTrace">
+            <Loader2 v-if="traceLoading" class="h-3.5 w-3.5 animate-spin" />
+            <Route v-else class="h-3.5 w-3.5" />
+            追踪
+          </Button>
+        </div>
+        <p v-if="traceLoading" class="mt-3 text-xs text-[var(--muted)]">逐跳探测中，最多 20 跳，通常需要十几秒…</p>
+        <div v-else-if="traceHops && traceHops.length" class="mt-3 overflow-x-auto">
+          <table class="w-full text-xs">
+            <thead class="text-[var(--muted)]">
+              <tr class="border-b border-[var(--card-border)]">
+                <th class="px-2 py-1.5 text-left font-medium">跳</th>
+                <th class="px-2 py-1.5 text-left font-medium">地址</th>
+                <th class="px-2 py-1.5 text-right font-medium">延迟</th>
+                <th class="px-2 py-1.5 text-right font-medium">平均</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="h in traceHops"
+                :key="h.hop"
+                class="border-b border-[var(--card-border)] last:border-0"
+              >
+                <td class="px-2 py-1.5 tabular-nums text-[var(--muted)]">{{ h.hop }}</td>
+                <td class="px-2 py-1.5 font-mono">
+                  <span v-if="h.addr">{{ h.addr }}</span>
+                  <span v-else class="text-[var(--muted)]">请求超时</span>
+                </td>
+                <td class="px-2 py-1.5 text-right font-mono text-[10px] text-[var(--muted)]">
+                  {{ h.delays.map((d) => (d === null ? "*" : `${d}ms`)).join(" / ") }}
+                </td>
+                <td
+                  class="px-2 py-1.5 text-right font-mono tabular-nums"
+                  :class="h.avg_ms > 150 ? 'text-[#f59e0b]' : ''"
+                >
+                  {{ h.avg_ms ? `${h.avg_ms} ms` : "—" }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="mt-2 text-[10px] text-[var(--muted)]">
+          加 -d 不解析主机名、单跳超时 800ms，整体更快。个别跳显示超时是正常的（路由器禁 ICMP）。
+        </p>
+      </Card>
+
+      <!-- 局域网设备 -->
+      <Card class="p-4">
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <p class="flex items-center gap-2 text-sm font-semibold">
+            <Monitor class="h-4 w-4 text-[var(--primary)]" /> 局域网设备
+            <Badge v-if="lanDevices.length" tone="primary">{{ lanDevices.length }} 台</Badge>
+          </p>
+          <div class="flex gap-2">
+            <Button v-if="lanDevices.length" variant="gray" size="sm" @click="copyLan">
+              <Copy class="h-3.5 w-3.5" /> 复制
+            </Button>
+            <Button variant="gray" size="sm" :disabled="lanLoading" @click="doScanLan">
+              <Loader2 v-if="lanLoading" class="h-3.5 w-3.5 animate-spin" />
+              <RefreshCw v-else class="h-3.5 w-3.5" />
+              扫描
+            </Button>
+          </div>
+        </div>
+        <p v-if="!lanDevices.length && !lanLoading" class="text-xs text-[var(--muted)]">
+          点「扫描」读取本机 ARP 缓存，列出与本机同网段的设备。
+        </p>
+        <div v-else-if="lanDevices.length" class="max-h-[320px] overflow-y-auto">
+          <div class="divide-y divide-[var(--card-border)] rounded-xl border border-[var(--card-border)]">
+            <div
+              v-for="d in lanDevices"
+              :key="d.ip"
+              class="flex items-center gap-3 px-3 py-1.5 text-xs transition-colors hover:bg-[var(--card-soft)]"
+            >
+              <span class="w-28 shrink-0 font-mono">{{ d.ip }}</span>
+              <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-[var(--muted)]">{{ d.mac }}</span>
+              <Badge v-if="d.is_self" tone="success" class="!px-1.5 !py-0 !text-[10px]">本机</Badge>
+            </div>
+          </div>
+        </div>
+        <p class="mt-2 text-[10px] leading-relaxed text-[var(--muted)]">
+          只读本机 ARP 缓存，不对网段做暴力扫描，不会触发防火墙告警。
+          已自动剔除 169.254 链路本地地址，并只保留与本机同网段的条目。
+        </p>
+      </Card>
     </div>
 
     <!-- 系统维护 -->

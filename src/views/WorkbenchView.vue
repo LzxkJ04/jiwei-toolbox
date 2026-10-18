@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import {
   Activity, Cpu, FileSpreadsheet, FolderOpen, HardDrive, LayoutTemplate, ListChecks, Loader2,
-  Package, Play, RefreshCw, ShieldCheck, Sparkles, Terminal, Trash2, Wrench,
+  Package, Play, RefreshCw, ShieldBan, ShieldCheck, Sparkles, Terminal, Trash2, Wrench,
 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
@@ -122,6 +122,7 @@ const QUICK_TOOLS = [
   { id: "quicktools", label: "快捷工具", desc: "端口 / 系统入口 / 关机", icon: Sparkles, page: "quicktools" },
   { id: "shellcmd", label: "快捷命令", desc: "SFC / DISM / 网络诊断", icon: Terminal, page: "shellcmd" },
   { id: "report", label: "系统信息导出", desc: "整机报告一键导出", icon: FileSpreadsheet, page: "report" },
+  { id: "filter", label: "黑白名单", desc: "保护系统组件不被误删", icon: ShieldBan, page: "filter" },
 ] as const;
 
 onMounted(refresh);
