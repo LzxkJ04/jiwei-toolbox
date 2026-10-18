@@ -13,6 +13,7 @@ pub mod license;
 pub mod logs;
 pub mod maintenance;
 pub mod software;
+pub mod startup_backup;
 pub mod systools;
 pub mod sysmon;
 pub mod sysquick;

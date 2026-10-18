@@ -17,6 +17,9 @@ mod launcher;
 mod modules;
 mod single_instance;
 
+/// startup_backup 供 systools 内部使用，这里再提一层方便 `crate::startup_backup::`
+pub(crate) use modules::startup_backup;
+
 /// 兼容脚手架保留
 #[allow(dead_code)]
 #[tauri::command]
@@ -262,6 +265,7 @@ pub fn run() {
             maintenance::uptime_info,
             // 系统工具
             systools::list_startup,
+            systools::list_disabled_startup,
             systools::toggle_startup,
             systools::list_services,
             systools::set_service,

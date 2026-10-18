@@ -95,40 +95,147 @@ pub fn toggle_startup(name: String, enable: bool) -> Result<(), String> {
     r
 }
 
+/// 禁用启动文件夹里的快捷方式：把 .lnk 移到备份目录，并记下落点与原目录
+fn disable_startup_shortcut(name: &str) -> Result<(), String> {
+    let folders: Vec<std::path::PathBuf> = [
+        std::env::var("APPDATA").ok(),
+        std::env::var("ProgramData").ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|p| Path::new(&p).join(r"Microsoft\Windows\Start Menu\Programs\Startup"))
+    .collect();
+    for folder in folders {
+        let lnk = folder.join(format!("{name}.lnk"));
+        if !lnk.exists() {
+            continue;
+        }
+        let source = if folder.to_string_lossy().contains("AppData") {
+            "startup-folder-user"
+        } else {
+            "startup-folder-all"
+        };
+        let stashed = crate::startup_backup::stash_shortcut(&lnk)?;
+        // 用「备份路径|原目录」记录，还原时能精确放回
+        crate::startup_backup::remember(
+            name,
+            &format!("{}|{}", stashed.to_string_lossy(), folder.to_string_lossy()),
+            source,
+        )?;
+        return Ok(());
+    }
+    Err(format!("未找到快捷方式: {name}.lnk"))
+}
+
 fn toggle_startup_inner(name: String, enable: bool) -> Result<(), String> {
     if enable {
+        // 优先从落盘备份还原：这是唯一能恢复「启动文件夹快捷方式」和
+        // 已被删掉的 HKLM 项的方式（普通用户对 HKLM 也没有写权限）
+        if let Some(b) = crate::startup_backup::take_by_name(&name) {
+            return restore_from_backup(&b);
+        }
+        // 兼容旧流程：从本次会话的 list_startup 缓存里取命令
         let cmd = STARTUP_CACHE
             .lock()
             .ok()
             .and_then(|c| c.as_ref().and_then(|m| m.get(&name).cloned()))
-            .ok_or_else(|| format!("未知启动项: {}", name))?;
+            .ok_or_else(|| format!("没有找到「{}」的备份，无法还原", name))?;
         if cmd.to_lowercase().ends_with(".lnk") {
-            return Err("启动文件夹快捷方式暂不支持启用恢复".into());
+            return Err("启动文件夹快捷方式已在备份中，请点重新扫描后再试".into());
         }
         let run = RegKey::predef(HKEY_CURRENT_USER)
             .open_subkey_with_flags(RUN_PATH_HKCU, KEY_SET_VALUE)
             .map_err(|e| e.to_string())?;
         run.set_value(&name, &cmd).map_err(|e| e.to_string())
     } else {
+        // 禁用前先记住原始命令，之后才能真的还原
         let mut last_err = None;
-        for (root, path) in [
-            (HKEY_CURRENT_USER, RUN_PATH_HKCU),
-            (HKEY_LOCAL_MACHINE, RUN_PATH_HKLM),
-            (HKEY_LOCAL_MACHINE, RUN_PATH_WOW),
+        for (root, path, label) in [
+            (HKEY_CURRENT_USER, RUN_PATH_HKCU, "hkcu-run"),
+            (HKEY_LOCAL_MACHINE, RUN_PATH_HKLM, "hklm-run"),
+            (HKEY_LOCAL_MACHINE, RUN_PATH_WOW, "hklm-run-wow"),
         ] {
-            if let Ok(run) = RegKey::predef(root).open_subkey_with_flags(path, KEY_SET_VALUE) {
-                match run.delete_value(&name) {
-                    Ok(_) => return Ok(()),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(e) => last_err = Some(e.to_string()),
+            let Ok(run) = RegKey::predef(root).open_subkey_with_flags(path, KEY_SET_VALUE) else {
+                continue;
+            };
+            let cmd = match run.get_value::<String, _>(&name) {
+                Ok(v) => v,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    last_err = Some(e.to_string());
+                    continue;
                 }
+            };
+            // 先落盘再删：即使删除失败，备份也不会丢
+            crate::startup_backup::remember(&name, &cmd, label)?;
+            match run.delete_value(&name) {
+                Ok(_) => return Ok(()),
+                Err(e) => last_err = Some(e.to_string()),
             }
         }
         match last_err {
             Some(e) => Err(e),
-            None => Err(format!("未找到启动项: {}", name)),
+            None => {
+                // Run 键里没有，可能是启动文件夹的快捷方式
+                disable_startup_shortcut(&name)
+            }
         }
     }
+}
+
+/// 按备份把启动项放回原处。
+fn restore_from_backup(b: &crate::startup_backup::StartupBackup) -> Result<(), String> {
+    match b.source.as_str() {
+        "hkcu-run" => {
+            let run = RegKey::predef(HKEY_CURRENT_USER)
+                .open_subkey_with_flags(RUN_PATH_HKCU, KEY_SET_VALUE)
+                .map_err(|e| format!("无法写入启动项：{e}"))?;
+            run.set_value(&b.name, &b.command).map_err(|e| e.to_string())
+        }
+        "hklm-run" | "hklm-run-wow" => {
+            // 还原系统级启动项通常需要管理员权限，失败要给出明确原因
+            let path = if b.source == "hklm-run-wow" { RUN_PATH_WOW } else { RUN_PATH_HKLM };
+            let run = RegKey::predef(HKEY_LOCAL_MACHINE)
+                .open_subkey_with_flags(path, KEY_SET_VALUE)
+                .map_err(|_| "还原系统级启动项需要管理员权限，请以管理员身份运行".to_string())?;
+            run.set_value(&b.name, &b.command).map_err(|e| e.to_string())
+        }
+        "startup-folder-user" | "startup-folder-all" => {
+            // command 存的是「备份文件路径|原目录路径」
+            let (stashed, original) = b
+                .command
+                .split_once('|')
+                .ok_or_else(|| "备份记录格式异常".to_string())?;
+            crate::startup_backup::unstash_shortcut(
+                std::path::Path::new(stashed),
+                std::path::Path::new(original),
+            )?;
+            Ok(())
+        }
+        _ => Err("未知的启动项来源".into()),
+    }
+}
+
+/// 已禁用的启动项列表（界面用来标注「已禁用」并提供还原）
+#[derive(Serialize)]
+pub struct DisabledStartup {
+    pub name: String,
+    pub command: String,
+    pub source: String,
+    pub disabled_at: u64,
+}
+
+#[tauri::command]
+pub async fn list_disabled_startup() -> Vec<DisabledStartup> {
+    crate::startup_backup::load_backups()
+        .into_iter()
+        .map(|b| DisabledStartup {
+            name: b.name,
+            command: b.command,
+            source: b.source,
+            disabled_at: b.disabled_at,
+        })
+        .collect()
 }
 
 // ---------- Windows 服务 ----------

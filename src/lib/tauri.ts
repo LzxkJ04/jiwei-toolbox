@@ -249,6 +249,15 @@ export interface StartupItem {
   location: string;
 }
 
+/** 已被本工具禁用、可从备份还原的启动项 */
+export interface DisabledStartup {
+  name: string;
+  command: string;
+  /** hkcu-run / hklm-run / hklm-run-wow / startup-folder-user / startup-folder-all */
+  source: string;
+  disabled_at: number;
+}
+
 export interface ServiceItem {
   name: string;
   display: string;
@@ -597,6 +606,7 @@ export const checkUpdate = () => tryCall<UpdateInfo>("check_update");
 
 // —— 系统工具
 export const listStartup = () => tryCall<StartupItem[]>("list_startup");
+export const listDisabledStartup = () => tryCall<DisabledStartup[]>("list_disabled_startup");
 export const toggleStartup = (name: string, enable: boolean) =>
   tryCall<null>("toggle_startup", { name, enable });
 export const listServices = () => tryCall<ServiceItem[]>("list_services");

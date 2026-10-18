@@ -17,10 +17,10 @@ import EmptyState from "../components/ui/EmptyState.vue";
 import Spinner from "../components/ui/Spinner.vue";
 import {
   cleanJunk, driverList, exportDriverList, getEnvVars, listRuntimeLibs, listServices,
-  listStartup, listUwp, onRuntimeProgress, readHosts, removeUwp, installRuntime,
+  listStartup, listDisabledStartup, listUwp, onRuntimeProgress, readHosts, removeUwp, installRuntime,
   scanJunk, setEnvVar, setService, toggleStartup, writeHosts,
-  type DriverInfo, type EnvVar, type JunkItem, type RuntimeLib, type ServiceItem,
-  type StartupItem, type UwpApp,
+  type DisabledStartup, type DriverInfo, type EnvVar, type JunkItem, type RuntimeLib,
+  type ServiceItem, type StartupItem, type UwpApp,
 } from "../lib/tauri";
 import { toast } from "../lib/toast";
 import { formatBytes } from "../lib/utils";
@@ -66,10 +66,12 @@ const startupItems = ref<StartupItem[] | null>(null);
 const startupLoading = ref(false);
 const enabledMap = ref<Record<string, boolean>>({});
 const toggling = ref<Record<string, boolean>>({});
+/** 已被本工具禁用的项（配置目录里有备份，可原样还原） */
+const disabledStartup = ref<DisabledStartup[]>([]);
 
 async function loadStartup() {
   startupLoading.value = true;
-  const res = await listStartup();
+  const [res, disabled] = await Promise.all([listStartup(), listDisabledStartup()]);
   startupLoading.value = false;
   if (res) {
     startupItems.value = res;
@@ -80,6 +82,7 @@ async function loadStartup() {
     enabledMap.value = map;
     loaded.value.startup = true;
   }
+  disabledStartup.value = disabled ?? [];
 }
 
 async function onToggleStartup(item: StartupItem, enable: boolean) {
@@ -93,7 +96,40 @@ async function onToggleStartup(item: StartupItem, enable: boolean) {
   } else {
     enabledMap.value[item.name] = enable;
     toast(`已${enable ? "启用" : "禁用"}「${item.name}」`, "success");
+    // 禁用后列表里会少一项，重新拉一次让「已禁用」区同步
+    void loadStartup();
   }
+}
+
+/** 从「已禁用」区还原一项 */
+async function restoreStartup(name: string) {
+  toggling.value[name] = true;
+  const res = await toggleStartup(name, true);
+  toggling.value[name] = false;
+  if (res === null) {
+    toast(`还原「${name}」失败`, "error");
+    return;
+  }
+  toast(`已还原「${name}」`, "success");
+  await loadStartup();
+}
+
+function sourceLabel(src: string) {
+  const map: Record<string, string> = {
+    "hkcu-run": "当前用户启动项",
+    "hklm-run": "系统启动项",
+    "hklm-run-wow": "系统启动项 (32 位)",
+    "startup-folder-user": "启动文件夹",
+    "startup-folder-all": "公共启动文件夹",
+  };
+  return map[src] ?? src;
+}
+
+function fmtDate(ts: number) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 /* ============ 2. 服务 ============ */
@@ -477,6 +513,36 @@ onUnmounted(() => {
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <!-- 已禁用区：本工具禁用的项都有备份，可以原样还原 -->
+      <div v-if="disabledStartup.length" class="mt-4 rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-3">
+        <div class="mb-2 flex flex-wrap items-center gap-2">
+          <p class="text-xs font-semibold text-[var(--text-strong)]">已禁用（{{ disabledStartup.length }}）</p>
+          <p class="text-[10px] text-[var(--muted)]">原始命令已备份到配置目录，还原会写回原位置</p>
+        </div>
+        <div class="space-y-1.5">
+          <div
+            v-for="d in disabledStartup"
+            :key="`${d.name}-${d.source}`"
+            class="flex flex-wrap items-center gap-2 rounded-lg bg-[var(--card)] px-2.5 py-1.5"
+          >
+            <span class="min-w-0 flex-1 truncate text-xs font-medium" :title="d.name">{{ d.name }}</span>
+            <span class="shrink-0 rounded bg-[var(--btn-gray)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
+              {{ sourceLabel(d.source) }}
+            </span>
+            <span class="hidden shrink-0 text-[10px] text-[var(--muted)] sm:inline">{{ fmtDate(d.disabled_at) }}</span>
+            <Button
+              variant="gray"
+              size="sm"
+              :disabled="toggling[d.name]"
+              title="还原到原位置"
+              @click="restoreStartup(d.name)"
+            >
+              还原
+            </Button>
+          </div>
+        </div>
       </div>
     </Card>
 
