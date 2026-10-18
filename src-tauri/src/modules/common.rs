@@ -176,7 +176,7 @@ pub fn write_setting_raw(key: &str, value: serde_json::Value) -> Result<(), Stri
 pub fn close_to_tray_enabled() -> bool {
     read_setting_raw("close_to_tray")
         .and_then(|v| v.as_bool())
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 /// 读取"关闭到托盘"开关

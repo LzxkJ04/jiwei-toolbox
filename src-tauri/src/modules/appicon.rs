@@ -88,7 +88,7 @@ fn extract_domain(homepage: &str) -> Option<String> {
 
 /// 获取图标 data URL：磁盘缓存 → 在线拉取（存缓存）→ 失败空串（前端降级首字母）
 #[tauri::command]
-pub fn app_icon(homepage: String) -> String {
+pub async fn app_icon(homepage: String) -> String {
     let Some(domain) = extract_domain(&homepage) else {
         return String::new();
     };

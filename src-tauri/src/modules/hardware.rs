@@ -26,10 +26,14 @@ pub struct DiskSpeed {
 
 fn ps_json(script: &str) -> Option<serde_json::Value> {
     let full = format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; {}", script);
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &full])
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &full]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -136,7 +140,7 @@ fn gpu_list() -> Vec<String> {
 
 /// 硬件信息总览（CPU / 内存 / 主板 / BIOS / 显卡 / 磁盘）
 #[tauri::command]
-pub fn hw_info() -> serde_json::Value {
+pub async fn hw_info() -> serde_json::Value {
     use sysinfo::System;
     let mut sys = System::new_all();
     sys.refresh_cpu_usage();
@@ -518,7 +522,7 @@ fn jopt(v: Option<&serde_json::Value>, key: &str) -> Option<f64> {
 /// 磁盘 SMART 健康：Get-PhysicalDisk + Get-StorageReliabilityCounter 按 DeviceId 对齐；
 /// 部分盘无可靠性数据（需管理员/不支持）时相应字段为 null
 #[tauri::command]
-pub fn disk_smart() -> Result<Vec<serde_json::Value>, String> {
+pub async fn disk_smart() -> Result<Vec<serde_json::Value>, String> {
     let disks = as_array(ps_json(
         r#"@(Get-PhysicalDisk | Select-Object DeviceId,FriendlyName,SerialNumber,BusType,MediaType,HealthStatus,OperationalStatus) | ConvertTo-Json -Compress"#,
     ));
@@ -559,7 +563,7 @@ fn round1(v: f64) -> f64 {
 
 /// CPU 温度：sysinfo 温度组件（名含 CPU/Core 取均值）→ WMI 热区回退 → null
 #[tauri::command]
-pub fn cpu_temp() -> Option<f64> {
+pub async fn cpu_temp() -> Option<f64> {
     // sysinfo（Windows 上支持有限，取不到则走 WMI）
     let comps = sysinfo::Components::new_with_refreshed_list();
     let vals: Vec<f64> = comps
@@ -597,7 +601,7 @@ pub fn cpu_temp() -> Option<f64> {
 
 /// GPU 温度：nvidia-smi（PATH → System32 → NVSMI 安装目录），不可用返回 null
 #[tauri::command]
-pub fn gpu_temp() -> Option<f64> {
+pub async fn gpu_temp() -> Option<f64> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     for prog in [

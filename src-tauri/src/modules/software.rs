@@ -137,11 +137,25 @@ fn run_complete_action(app: &tauri::AppHandle, dirs: &crate::dirs::Dirs) {
         "shutdown" => {
             // 关机（60 秒缓冲，可 shutdown /a 取消）。仅由用户显式设置触发。
             crate::logs::op_log(dirs, "install", "tasks_done", "全部任务完成，60 秒后关机");
-            let _ = std::process::Command::new("shutdown").args(["/s", "/t", "60"]).spawn();
+            let mut c = std::process::Command::new("shutdown");
+        c.args(["/s", "/t", "60"]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x0800_0000);
+        }
+        let _ = c.spawn();
         }
         "hibernate" => {
             crate::logs::op_log(dirs, "install", "tasks_done", "全部任务完成，系统休眠");
-            let _ = std::process::Command::new("shutdown").arg("/h").spawn();
+            let mut c = std::process::Command::new("shutdown");
+        c.arg("/h");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x0800_0000);
+        }
+        let _ = c.spawn();
         }
         _ => {}
     }

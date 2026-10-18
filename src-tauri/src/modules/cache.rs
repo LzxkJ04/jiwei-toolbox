@@ -43,7 +43,7 @@ pub struct JunkItem {
 
 /// 扫描垃圾：%TEMP%/*、回收站、缩略图缓存、Chrome/Edge 缓存（存在才列）
 #[tauri::command]
-pub fn scan_junk() -> Vec<JunkItem> {
+pub async fn scan_junk() -> Vec<JunkItem> {
     let mut out = Vec::new();
 
     // %TEMP% 顶层各项
@@ -110,7 +110,7 @@ pub fn clean_junk(paths: Vec<String>) {
 
 /// 应用缓存统计（downloads / logs / temp）
 #[tauri::command]
-pub fn cache_stats() -> serde_json::Value {
+pub async fn cache_stats() -> serde_json::Value {
     let dirs = crate::dirs::load_dirs();
     let downloads = Path::new(&dirs.cache).join("downloads");
     let temp = Path::new(&dirs.cache).join("temp");
@@ -181,7 +181,7 @@ fn push_dir_files(out: &mut Vec<CacheFile>, dir: &Path, kind: &str) {
 /// 缓存文件明细：cache\downloads（download）、cache\temp（temp）、
 /// 日志目录（log）、cache 根一级文件（other，如 softwares.json）
 #[tauri::command]
-pub fn cache_files() -> Vec<CacheFile> {
+pub async fn cache_files() -> Vec<CacheFile> {
     let dirs = crate::dirs::load_dirs();
     let cache = Path::new(&dirs.cache);
     let mut out = Vec::new();

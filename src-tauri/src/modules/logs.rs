@@ -35,7 +35,7 @@ pub fn open_log_dir() -> Result<(), String> {
 
 /// 列出日志文件名（按名称倒序）
 #[tauri::command]
-pub fn list_logs() -> Vec<String> {
+pub async fn list_logs() -> Vec<String> {
     let dirs = crate::dirs::load_dirs();
     let mut out: Vec<String> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dirs.log) {
@@ -52,7 +52,7 @@ pub fn list_logs() -> Vec<String> {
 
 /// 读取日志内容（仅允许 log 目录下的普通文件名，防目录穿越）
 #[tauri::command]
-pub fn read_log(file: String) -> Result<String, String> {
+pub async fn read_log(file: String) -> Result<String, String> {
     if file.contains('\\') || file.contains('/') || file.contains("..") {
         return Err("非法日志文件名".into());
     }
@@ -64,7 +64,7 @@ pub fn read_log(file: String) -> Result<String, String> {
 
 /// 清空日志目录（删除全部日志文件，保留目录本身），返回删除的文件数
 #[tauri::command]
-pub fn clear_logs() -> Result<usize, String> {
+pub async fn clear_logs() -> Result<usize, String> {
     let dirs = crate::dirs::load_dirs();
     std::fs::create_dir_all(&dirs.log).map_err(|e| e.to_string())?;
     let mut count = 0usize;

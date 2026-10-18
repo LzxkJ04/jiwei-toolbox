@@ -57,7 +57,7 @@ fn enum_root(root: HKEY, path: &str, label: &str, out: &mut Vec<InstalledApp>) {
 
 /// 枚举已安装软件（HKLM + WOW6432Node + HKCU 的 Uninstall 键）
 #[tauri::command]
-pub fn list_installed() -> Vec<InstalledApp> {
+pub(crate) fn list_installed_inner() -> Vec<InstalledApp> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for (root, path, label) in [
@@ -76,6 +76,13 @@ pub fn list_installed() -> Vec<InstalledApp> {
     out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     out
 }
+
+/// Tauri 命令入口（线程池执行，避免阻塞主线程）
+#[tauri::command]
+pub async fn list_installed() -> Vec<InstalledApp> {
+    list_installed_inner()
+}
+
 
 /// 残留项
 #[derive(Debug, Serialize, Deserialize)]
@@ -109,7 +116,7 @@ fn walk_fs(dir: &Path, depth: u32, kw: &str, out: &mut Vec<ResidualItem>) {
 
 /// 按名称关键字（前 2 个词）扫描残留：Program Files / ProgramData / LOCALAPPDATA / Uninstall 注册表键
 #[tauri::command]
-pub fn scan_residual(name: String) -> Vec<ResidualItem> {
+pub async fn scan_residual(name: String) -> Vec<ResidualItem> {
     let out = scan_residual_inner(name.clone());
     let dirs = crate::dirs::load_dirs();
     crate::logs::op_log(&dirs, "uninstall", "scan_residual", &format!("扫描 \"{}\" 残留: 命中 {} 项", name, out.len()));
@@ -180,7 +187,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// 按名称模糊查找运行中的进程（忽略大小写，带不带 .exe 均可匹配），最多返回 20 个 pid
 #[tauri::command]
-pub fn process_running(name: String) -> Vec<u32> {
+pub async fn process_running(name: String) -> Vec<u32> {
     let mut kw = name.trim().to_lowercase();
     if kw.is_empty() {
         return vec![];
@@ -217,7 +224,7 @@ pub struct KillResult {
 
 /// 按 pid 逐个强制结束进程：先 taskkill /F，失败再用 sysinfo kill 兜底
 #[tauri::command]
-pub fn kill_process(pids: Vec<u32>) -> KillResult {
+pub async fn kill_process(pids: Vec<u32>) -> KillResult {
     let dirs = crate::dirs::load_dirs();
     let mut killed = Vec::new();
     let mut failed = Vec::new();

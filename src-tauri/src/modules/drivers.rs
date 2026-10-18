@@ -112,7 +112,7 @@ fn parse_drivers(text: &str) -> Vec<DriverItem> {
 
 /// 枚举第三方驱动包清单（pnputil /enum-drivers）
 #[tauri::command]
-pub fn driver_list() -> Result<Vec<DriverItem>, String> {
+pub async fn driver_list() -> Result<Vec<DriverItem>, String> {
     let text = pnputil_output().ok_or("无法执行 pnputil（请检查系统环境）")?;
     let list = parse_drivers(&text);
     if list.is_empty() {
@@ -132,7 +132,7 @@ fn csv_field(s: &str) -> String {
 
 /// 导出驱动清单为 CSV（UTF-8-BOM，Excel 友好）到 data\备份导出\drivers-YYYYMMDD.csv
 #[tauri::command]
-pub fn export_driver_list() -> Result<serde_json::Value, String> {
+pub async fn export_driver_list() -> Result<serde_json::Value, String> {
     let text = pnputil_output().ok_or("无法执行 pnputil（请检查系统环境）")?;
     let list = parse_drivers(&text);
     if list.is_empty() {

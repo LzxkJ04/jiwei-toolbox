@@ -64,7 +64,7 @@ pub fn create_backup(note: String) -> Result<serde_json::Value, String> {
 
 /// 列出全部备份
 #[tauri::command]
-pub fn list_backups() -> Vec<BackupInfo> {
+pub async fn list_backups() -> Vec<BackupInfo> {
     let dirs = crate::dirs::load_dirs();
     let mut out = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dirs.backup) {
@@ -210,7 +210,7 @@ pub fn set_auto_backup_inventory(enable: bool) -> Result<(), String> {
 /// 枚举已安装软件并写入 <data>\备份导出\software-inventory-auto-YYYYMMDD.json
 /// （UTF-8 JSON 数组：[{name, version, publisher, install_location}]）+ op_log
 fn write_inventory_snapshot(dirs: &crate::dirs::Dirs) -> Result<String, String> {
-    let apps = crate::uninstall::list_installed();
+    let apps = crate::uninstall::list_installed_inner();
     let items: Vec<serde_json::Value> = apps
         .iter()
         .map(|a| {

@@ -41,7 +41,7 @@ fn collect_run(root: HKEY, path: &str, label: &str, out: &mut Vec<StartupItem>, 
 
 /// 列出启动项（HKCU/HKLM Run + 启动文件夹 .lnk）
 #[tauri::command]
-pub fn list_startup() -> Vec<StartupItem> {
+pub async fn list_startup() -> Vec<StartupItem> {
     let mut out = Vec::new();
     let mut cache = HashMap::new();
 
@@ -159,11 +159,16 @@ fn parse_services_output(text: &str) -> Result<Vec<ServiceInfo>, String> {
 
 /// 列出全部 Windows 服务（PowerShell Get-Service）
 #[tauri::command]
-pub fn list_services() -> Result<Vec<ServiceInfo>, String> {
+pub async fn list_services() -> Result<Vec<ServiceInfo>, String> {
     let script = r#"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $r = Get-Service | ForEach-Object { @{ name = $_.Name; display = $_.DisplayName; status = [string]$_.Status; start_type = [string]$_.StartType } }; @($r) | ConvertTo-Json -Compress"#;
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .output()
+    let mut cmd = std::process::Command::new("powershell");
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        let out = cmd.output()
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).into_owned());
@@ -184,7 +189,14 @@ pub fn set_service(name: String, action: String) -> Result<(), String> {
         "disabled" | "disable" => vec!["config", &name, "start=", "disabled"],
         _ => return Err(format!("不支持的服务操作: {}", action)),
     };
-    let out = std::process::Command::new("sc").args(&args).output().map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new("sc");
+    cmd.args(&args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let out = cmd.output().map_err(|e| e.to_string())?;
     let r = if out.status.success() {
         Ok(())
     } else {
@@ -204,7 +216,7 @@ const HOSTS_PATH: &str = r"C:\Windows\System32\drivers\etc\hosts";
 
 /// 读取 hosts
 #[tauri::command]
-pub fn read_hosts() -> Result<String, String> {
+pub async fn read_hosts() -> Result<String, String> {
     let bytes = std::fs::read(HOSTS_PATH).map_err(|e| e.to_string())?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
@@ -332,7 +344,7 @@ fn detect_dotnet() -> (bool, String) {
 
 /// 列出常见运行库及安装状态 [{id, name, installed, version, download_url}]
 #[tauri::command]
-pub fn list_runtime_libs() -> Vec<serde_json::Value> {
+pub async fn list_runtime_libs() -> Vec<serde_json::Value> {
     let mut out = Vec::new();
 
     // VC++ 2015-2022（可自动安装）
@@ -469,11 +481,16 @@ pub struct UwpApp {
 
 /// 列出 UWP 应用（PowerShell Get-AppxPackage）
 #[tauri::command]
-pub fn list_uwp() -> Result<Vec<UwpApp>, String> {
+pub async fn list_uwp() -> Result<Vec<UwpApp>, String> {
     let script = r#"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; @(Get-AppxPackage | Select-Object Name,PackageFullName,Version) | ConvertTo-Json -Compress"#;
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .output()
+    let mut cmd = std::process::Command::new("powershell");
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        let out = cmd.output()
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).into_owned());
@@ -502,9 +519,14 @@ pub fn remove_uwp(package: String) -> Result<(), String> {
     let dirs = crate::dirs::load_dirs();
     let escaped = package.replace('\'', "''");
     let script = format!("Remove-AppxPackage -Package '{}'", escaped);
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .output()
+    let mut cmd = std::process::Command::new("powershell");
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        let out = cmd.output()
         .map_err(|e| e.to_string())?;
     let r = if out.status.success() {
         Ok(())

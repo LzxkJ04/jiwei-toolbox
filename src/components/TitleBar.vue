@@ -1,7 +1,14 @@
 <script setup lang="ts">
-import { onUnmounted, onMounted, ref } from "vue";
+import { onUnmounted, onMounted, ref, computed } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Copy, Minus, Pin, PinOff, Square, X } from "lucide-vue-next";
+import { Copy, Minus, Pin, PinOff, Square, X, Sun, Moon } from "lucide-vue-next";
+import { useThemeStore } from "../stores/theme";
+
+const theme = useThemeStore();
+const isDark = computed(() => (theme.mode === "system" ? true : theme.mode === "dark"));
+function toggleTheme() {
+  theme.setMode(isDark.value ? "light" : "dark");
+}
 
 const appWindow = getCurrentWindow();
 const maximized = ref(false);
@@ -66,6 +73,15 @@ async function togglePin() {
         @click="appWindow.minimize()"
       >
         <Minus class="h-4 w-4" />
+      </button>
+      <!-- 深浅主题切换 -->
+      <button
+        :title="isDark ? '切换到浅色模式' : '切换到深色模式'"
+        class="flex h-8 w-9 cursor-pointer items-center justify-center rounded-md text-[var(--muted)] transition-colors hover:bg-[var(--btn-gray)] hover:text-[var(--text)]"
+        @click="toggleTheme"
+      >
+        <Sun v-if="isDark" class="h-4 w-4" />
+        <Moon v-else class="h-4 w-4" />
       </button>
       <button
         :title="maximized ? '还原' : '最大化'"

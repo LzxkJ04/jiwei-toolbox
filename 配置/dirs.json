@@ -1,8 +1,8 @@
 {
   "program": "C:\\Program Files\\极维工具箱",
-  "data": "C:\\Users\\Administrator\\Documents\\极维工具箱",
-  "config": "C:\\Users\\Administrator\\Documents\\极维工具箱\\配置",
-  "backup": "C:\\Users\\Administrator\\Documents\\极维工具箱\\备份导出",
-  "cache": "C:\\Users\\Administrator\\Documents\\极维工具箱\\缓存",
-  "log": "C:\\Users\\Administrator\\Documents\\极维工具箱\\缓存\\logs"
+  "data": "C:\\Users\\Administrator\\AppData\\Local\\极维工具箱",
+  "config": "C:\\Users\\Administrator\\AppData\\Local\\极维工具箱\\配置",
+  "backup": "C:\\Users\\Administrator\\AppData\\Local\\极维工具箱\\备份导出",
+  "cache": "C:\\Users\\Administrator\\AppData\\Local\\极维工具箱\\缓存",
+  "log": "C:\\Users\\Administrator\\AppData\\Local\\极维工具箱\\缓存\\logs"
 }

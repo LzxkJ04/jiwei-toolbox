@@ -415,7 +415,7 @@ mod tests {
 
 /// 修改缓存目录（log 派生为 cache 下的 logs 子目录），写回 dirs.json 并创建目录
 #[tauri::command]
-pub fn set_cache_dir(new_cache: String) -> Result<(), String> {
+pub async fn set_cache_dir(new_cache: String) -> Result<(), String> {
     let nc = new_cache.trim().to_string();
     if nc.is_empty()
         || nc.len() > 200
