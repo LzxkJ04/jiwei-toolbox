@@ -147,6 +147,11 @@ async function runDiskSpeed() {
   diskTesting.value = false;
 }
 
+/** 测速结果可能缺字段（旧契约曾把 read_mbps 序列化成 readMbps），不能直接 toFixed */
+function fmtMbps(n: number | null | undefined) {
+  return typeof n === "number" && Number.isFinite(n) ? n.toFixed(1) : "—";
+}
+
 /* ============ 坏点检测（纯前端全屏纯色覆盖层） ============ */
 
 const PIXEL_COLORS = [
@@ -540,14 +545,14 @@ onUnmounted(() => {
           <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4 text-center">
             <p class="mb-1 text-xs text-[var(--muted)]">读取速度</p>
             <p class="text-3xl font-bold tabular-nums text-[var(--text-strong)]">
-              {{ diskRes ? diskRes.read_mbps.toFixed(1) : "—" }}
+              {{ fmtMbps(diskRes?.read_mbps) }}
               <span class="ml-1 text-sm font-normal text-[var(--muted)]">MB/s</span>
             </p>
           </div>
           <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4 text-center">
             <p class="mb-1 text-xs text-[var(--muted)]">写入速度</p>
             <p class="text-3xl font-bold tabular-nums text-[var(--text-strong)]">
-              {{ diskRes ? diskRes.write_mbps.toFixed(1) : "—" }}
+              {{ fmtMbps(diskRes?.write_mbps) }}
               <span class="ml-1 text-sm font-normal text-[var(--muted)]">MB/s</span>
             </p>
           </div>

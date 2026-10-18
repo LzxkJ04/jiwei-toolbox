@@ -19,6 +19,16 @@ export interface EnvStatus {
   has_webview2: boolean;
 }
 
+/** 许可证页：后端 LicenseStatus 使用 camelCase */
+export interface LicenseStatus {
+  osEdition: string;
+  osVersion: string;
+  statusText: string;
+  partialKey: string;
+  productId: string;
+  licensed: boolean;
+}
+
 export interface SoftwareItem {
   id: string;
   name: string;
@@ -341,6 +351,8 @@ export const hwInfo = () => tryCall<HwInfo>("hw_info");
 export const cpuBurnStart = (seconds: number) => tryCall<null>("cpu_burn_start", { seconds });
 export const cpuBurnStop = () => tryCall<null>("cpu_burn_stop");
 export const diskSpeed = (path: string) => tryCall<DiskSpeed>("disk_speed", { path });
+/** 只读查询 Windows 许可证状态（不含激活） */
+export const licenseStatus = () => tryCall<LicenseStatus>("license_status");
 export const gpuBurnStart = (seconds: number) => tryCall<null>("gpu_burn_start", { seconds });
 export const gpuBurnStop = () => tryCall<null>("gpu_burn_stop");
 export const memTestStart = () => tryCall<null>("mem_test_start");

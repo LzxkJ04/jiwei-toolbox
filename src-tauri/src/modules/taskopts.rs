@@ -5,9 +5,8 @@
 
 use serde::Serialize;
 
-/// 任务选项（camelCase 序列化，与前端契约一致）
+/// 任务选项。字段保持 snake_case：前端 TaskOpts.speed_limit_kb 与 settings.json 都用这个名字。
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TaskOpts {
     /// "serial" | "parallel"
     pub mode: String,
@@ -42,7 +41,8 @@ pub fn get_task_opts() -> TaskOpts {
 }
 
 /// 设置任务选项（校验后持久化 settings.json）
-#[tauri::command]
+/// rename_all = snake_case：前端传入的就是 speed_limit_kb，默认 camelCase 会找不到字段导致整次保存失败。
+#[tauri::command(rename_all = "snake_case")]
 pub fn set_task_opts(mode: String, concurrency: u32, speed_limit_kb: u32) -> Result<(), String> {
     if mode != "serial" && mode != "parallel" {
         return Err(format!("未知的执行模式: {}（仅支持 serial / parallel）", mode));

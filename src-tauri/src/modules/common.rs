@@ -73,7 +73,6 @@ pub fn has_webview2() -> bool {
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct EnvStatus {
     pub is_admin: bool,
     pub has_webview2: bool,

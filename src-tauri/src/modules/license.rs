@@ -59,7 +59,7 @@ fn read_os_info() -> (String, String, String) {
 
 /// 查询 Windows 许可证状态（只读，无任何写操作）
 #[tauri::command]
-pub fn license_status() -> LicenseStatus {
+pub async fn license_status() -> LicenseStatus {
     let (os_edition, os_version, reg_product_id) = read_os_info();
 
     // PowerShell CIM 查询：PartialProductKey 非空且属于 Windows 应用
@@ -124,5 +124,39 @@ pub fn license_status() -> LicenseStatus {
         partial_key,
         product_id,
         licensed: status_code == 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{map_license_status, LicenseStatus};
+
+    #[test]
+    fn license_status_codes() {
+        assert_eq!(map_license_status(0), "未授权");
+        assert_eq!(map_license_status(1), "已授权");
+        assert_eq!(map_license_status(5), "未激活警告");
+        assert_eq!(map_license_status(99), "未知状态");
+    }
+
+    #[test]
+    fn license_json_is_camel_case() {
+        // 前端 LicenseView 读 osEdition / statusText / partialKey / productId
+        let v = serde_json::to_value(LicenseStatus {
+            os_edition: "Windows 11 Pro".into(),
+            os_version: "24H2".into(),
+            status_text: "已授权".into(),
+            partial_key: "ABCDE".into(),
+            product_id: "00330".into(),
+            licensed: true,
+        })
+        .unwrap();
+        assert_eq!(v["osEdition"], "Windows 11 Pro");
+        assert_eq!(v["osVersion"], "24H2");
+        assert_eq!(v["statusText"], "已授权");
+        assert_eq!(v["partialKey"], "ABCDE");
+        assert_eq!(v["productId"], "00330");
+        assert_eq!(v["licensed"], true);
+        assert!(v.get("os_edition").is_none());
     }
 }

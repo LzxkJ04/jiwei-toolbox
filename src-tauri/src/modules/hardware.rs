@@ -16,7 +16,6 @@ static BURN_WORKERS: Mutex<Vec<JoinHandle<()>>> = Mutex::new(Vec::new());
 static BURN_MONITOR: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DiskSpeed {
     pub read_mbps: f64,
     pub write_mbps: f64,
@@ -744,7 +743,7 @@ fn run_mem_test(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::vram_mb;
+    use super::{vram_mb, DiskSpeed};
 
     #[test]
     fn vram_bytes_to_mb() {
@@ -758,5 +757,13 @@ mod tests {
         assert_eq!(vram_mb(-1.0), 0);
         assert_eq!(vram_mb(0.0), 0);
         assert_eq!(vram_mb(128.0 * 1024.0 * 1024.0 * 1024.0), 0);
+    }
+
+    #[test]
+    fn disk_speed_json_keeps_snake_case() {
+        // 前端读 read_mbps / write_mbps，不能被改成 readMbps
+        let v = serde_json::to_value(DiskSpeed { read_mbps: 1.5, write_mbps: 2.5 }).unwrap();
+        assert_eq!(v["read_mbps"], 1.5);
+        assert_eq!(v["write_mbps"], 2.5);
     }
 }
