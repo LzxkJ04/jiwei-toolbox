@@ -32,7 +32,7 @@ fn add_dir_to_zip(zw: &mut zip::ZipWriter<File>, dir: &Path, base: &Path) -> Res
 
 /// 创建配置备份：打包 config 目录 → backup\backup-YYYYMMDD-HHMMSS.jwbak
 #[tauri::command]
-pub fn create_backup(note: String) -> Result<serde_json::Value, String> {
+pub async fn create_backup(note: String) -> Result<serde_json::Value, String> {
     let dirs = crate::dirs::load_dirs();
     let src = PathBuf::from(&dirs.config);
     if !src.is_dir() {

@@ -47,7 +47,7 @@ fn version_gt(a: &str, b: &str) -> bool {
 
 /// 检查更新：比较远程 version.json 与当前版本，仅返回信息
 #[tauri::command]
-pub fn check_update() -> serde_json::Value {
+pub async fn check_update() -> serde_json::Value {
     let current = env!("CARGO_PKG_VERSION").to_string();
     match fetch_version_json() {
         Some(v) => {

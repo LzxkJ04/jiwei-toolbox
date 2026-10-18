@@ -38,6 +38,20 @@ function fmtCountdown(totalSec: number) {
 const hw = ref<HwInfo | null>(null);
 const hwLoading = ref(false);
 
+const memLine = computed(() => {
+  const mods = hw.value?.memoryModules ?? [];
+  if (mods.length === 0) return "";
+  return mods
+    .map((m) => {
+      const who = (m.manufacturer || "").trim();
+      const cap = m.capacity_gb ? `${m.capacity_gb}GB` : "";
+      const spd = m.speed ? `${m.speed}MHz` : "";
+      return [who, cap, spd].filter(Boolean).join(" ");
+    })
+    .filter(Boolean)
+    .join(" · ");
+});
+
 async function loadHw() {
   hwLoading.value = true;
   hw.value = await hwInfo();
@@ -45,7 +59,10 @@ async function loadHw() {
 }
 
 function vramText(vram: number) {
-  return vram > 0 ? `${vram} MB 显存` : "";
+  if (!vram || vram <= 0) return "";
+  // 后端已换算为 MB；若仍是字节（旧数据 > 64GB 当 MB 不可能）则再除一次
+  const mb = vram > 65536 ? Math.round(vram / 1048576) : Math.round(vram);
+  return mb > 0 ? `${mb} MB 显存` : "";
 }
 
 /* ============ CPU 烤机 ============ */
@@ -222,13 +239,19 @@ function healthMeta(s?: string): { label: string; cls: string } {
   if (v === "warning" || v.includes("caution")) {
     return { label: "警告", cls: "text-[#f5a623]" };
   }
-  if (v === "healthy" || v === "good") {
+  if (v === "healthy" || v === "good" || v === "ok") {
     return { label: "健康", cls: "text-[#30a46c]" };
   }
   return { label: s || "未知", cls: "text-[var(--muted)]" };
 }
 
 /** 磁盘温度配色：>60 红 / 45~60 黄 */
+/** 优先用 HealthStatus（Healthy），没有再用 OperationalStatus（OK） */
+function smartHealthText(d: DiskSmartInfo): string | undefined {
+  if (typeof d.health === "string" && d.health.trim()) return d.health;
+  return d.status;
+}
+
 function diskTempClass(t: number | null | undefined) {
   if (t == null) return "";
   if (t > 60) return "text-[#e5484d]";
@@ -326,6 +349,7 @@ onUnmounted(() => {
               <MemoryStick class="h-3.5 w-3.5" /> 内存总量
             </p>
             <p class="text-sm font-semibold text-[var(--text-strong)]">{{ formatBytes(hw.memory_total) }}</p>
+            <p v-if="memLine" class="mt-1 truncate text-xs text-[var(--muted)]" :title="memLine">{{ memLine }}</p>
           </div>
 
           <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-4">
@@ -595,8 +619,8 @@ onUnmounted(() => {
               <td class="px-3 py-2.5 font-mono">{{ d.serial || "—" }}</td>
               <td class="px-3 py-2.5">{{ d.bus_type || "—" }}</td>
               <td class="px-3 py-2.5">{{ d.media || "—" }}</td>
-              <td class="px-3 py-2.5 font-semibold" :class="healthMeta(d.status).cls">
-                {{ healthMeta(d.status).label }}
+              <td class="px-3 py-2.5 font-semibold" :class="healthMeta(smartHealthText(d)).cls">
+                {{ healthMeta(smartHealthText(d)).label }}
               </td>
               <td class="px-3 py-2.5 text-right tabular-nums" :class="diskTempClass(d.temperature_c)">
                 {{ d.temperature_c == null ? "—" : `${d.temperature_c}` }}

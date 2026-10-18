@@ -49,12 +49,8 @@ fn publish_queue_state(app: &tauri::AppHandle, running: bool, current_id: &str, 
     guard.total = total;
     guard.done = done;
     guard.total_pct = if total > 0 { (done as i64 * 100 / total as i64).min(100) } else { 0 };
-    let _ = app.emit("queue-state", serde_json::json!({
-        "running": guard.running,
-        "paused": guard.paused,
-        "current_id": guard.current_id,
-        "total_pct": guard.total_pct,
-    }));
+    // 走结构体序列化（camelCase：currentId / totalPct），与 get_queue_state 及前端一致
+    let _ = app.emit("queue-state", &*guard);
 }
 
 /// 暂停任务队列（下载分块间的原子暂停点生效）
@@ -328,7 +324,7 @@ fn validate_software_list(text: &str) -> Result<Vec<Software>, String> {
 /// 从远程源拉取软件清单 → 校验结构 → 写入缓存 softwares.json
 /// （清单校验失败 / 网络失败 / 404 均返回 Err，本地清单仍可用）
 #[tauri::command]
-pub fn update_software_list() -> Result<UpdateListResult, String> {
+pub async fn update_software_list() -> Result<UpdateListResult, String> {
     let mut url = crate::common::get_setting("software_source_url".into());
     if url.trim().is_empty() {
         url = DEFAULT_SOFTWARE_SOURCE.into();
@@ -532,17 +528,21 @@ fn verify_and_install(app: &tauri::AppHandle, dirs: &crate::dirs::Dirs, sw: &Sof
 
     emit_progress(Some(app), &sw.id, "install", 0, "开始静默安装");
     crate::logs::op_log(dirs, "install", "install", &format!("{} ({}) 开始静默安装 ({})", sw.name, sw.id, sw.silent_args));
-    let status = if sw.kind.eq_ignore_ascii_case("msi") {
-        std::process::Command::new("msiexec")
-            .arg("/i")
-            .arg(dest)
-            .args(sw.silent_args.split_whitespace())
-            .status()
+    let mut cmd = if sw.kind.eq_ignore_ascii_case("msi") {
+        let mut c = std::process::Command::new("msiexec");
+        c.arg("/i").arg(dest).args(sw.silent_args.split_whitespace());
+        c
     } else {
-        std::process::Command::new(dest)
-            .args(sw.silent_args.split_whitespace())
-            .status()
+        let mut c = std::process::Command::new(dest);
+        c.args(sw.silent_args.split_whitespace());
+        c
     };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW，避免静默安装闪控制台
+    }
+    let status = cmd.status();
     match status {
         Ok(s) if s.success() => {
             emit_progress(Some(app), &sw.id, "done", 100, "安装完成");

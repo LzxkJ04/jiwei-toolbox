@@ -455,8 +455,14 @@ fn do_install_runtime(app: tauri::AppHandle, id: String, url: &str) -> Result<()
     emit("install", 0);
 
     // 静默安装
-    let status = std::process::Command::new(&tmp)
-        .args(["/install", "/quiet", "/norestart"])
+    let mut cmd = std::process::Command::new(&tmp);
+    cmd.args(["/install", "/quiet", "/norestart"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let status = cmd
         .status()
         .map_err(|e| format!("无法启动安装程序: {}", e))?;
     let _ = std::fs::remove_file(&tmp);
@@ -541,6 +547,117 @@ pub fn remove_uwp(package: String) -> Result<(), String> {
     r
 }
 
+// ---------- 环境变量 ----------
+
+#[derive(Serialize)]
+pub struct EnvVar {
+    pub name: String,
+    pub value: String,
+}
+
+fn env_hive(scope: &str) -> Result<(HKEY, &'static str), String> {
+    match scope {
+        "user" => Ok((HKEY_CURRENT_USER, r"Environment")),
+        "system" => Ok((
+            HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        )),
+        _ => Err("scope 只能是 user 或 system".into()),
+    }
+}
+
+/// 变量名校验：非空、长度、禁止 '=' / 控制字符（可单测）
+fn validate_env_name(name: &str) -> Result<(), String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Err("变量名不能为空".into());
+    }
+    if n.len() > 255 {
+        return Err("变量名过长（最多 255 字符）".into());
+    }
+    if n.chars().any(|c| c == '=' || c == '\0' || c.is_control()) {
+        return Err("变量名包含非法字符".into());
+    }
+    Ok(())
+}
+
+/// 读取用户或系统环境变量（注册表，不展开 %VAR%）
+#[tauri::command]
+pub async fn get_env_vars(scope: String) -> Result<Vec<EnvVar>, String> {
+    let (root, path) = env_hive(scope.trim())?;
+    let key = RegKey::predef(root)
+        .open_subkey(path)
+        .map_err(|e| format!("打开环境变量失败: {e}"))?;
+    let mut out = Vec::new();
+    for (name, _) in key.enum_values().flatten() {
+        let value: String = key.get_value(&name).unwrap_or_default();
+        out.push(EnvVar { name, value });
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(out)
+}
+
+/// 写入或删除环境变量，并广播 WM_SETTINGCHANGE 让新进程生效
+#[tauri::command]
+pub async fn set_env_var(scope: String, name: String, value: String, is_delete: bool) -> Result<(), String> {
+    validate_env_name(&name)?;
+    if !is_delete && value.contains('\0') {
+        return Err("变量值包含非法字符".into());
+    }
+    if !is_delete && value.len() > 32_767 {
+        return Err("变量值过长".into());
+    }
+    let scope = scope.trim();
+    let (root, path) = env_hive(scope)?;
+    let key = RegKey::predef(root)
+        .open_subkey_with_flags(path, KEY_READ | KEY_WRITE)
+        .map_err(|e| {
+            if scope == "system" {
+                format!("写入系统环境变量失败（需要以管理员身份运行）: {e}")
+            } else {
+                format!("写入环境变量失败: {e}")
+            }
+        })?;
+    let name = name.trim();
+    if is_delete {
+        key.delete_value(name).map_err(|e| format!("删除失败: {e}"))?;
+    } else {
+        key.set_value(name, &value).map_err(|e| format!("写入失败: {e}"))?;
+    }
+    broadcast_env_change();
+    let dirs = crate::dirs::load_dirs();
+    crate::logs::op_log(
+        &dirs,
+        "env",
+        if is_delete { "delete" } else { "set" },
+        &format!("{scope}\\{name}"),
+    );
+    Ok(())
+}
+
+/// 通知资源管理器及其他进程环境变量已变更
+fn broadcast_env_change() {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+    };
+    let wide: Vec<u16> = std::ffi::OsStr::new("Environment")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            wide.as_ptr() as isize,
+            SMTO_ABORTIFHUNG,
+            1500,
+            std::ptr::null_mut(),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,5 +706,16 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].name, "ok1");
         assert_eq!(list[1].name, "ok2");
+    }
+
+    #[test]
+    fn env_name_rejects_empty_and_illegal() {
+        assert!(validate_env_name("").is_err());
+        assert!(validate_env_name("   ").is_err());
+        assert!(validate_env_name("A=B").is_err());
+        assert!(validate_env_name("has\nline").is_err());
+        assert!(validate_env_name(&"X".repeat(256)).is_err());
+        assert!(validate_env_name("PATH").is_ok());
+        assert!(validate_env_name(" MY_VAR ").is_ok());
     }
 }

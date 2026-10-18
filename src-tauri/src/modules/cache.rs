@@ -98,7 +98,7 @@ pub async fn scan_junk() -> Vec<JunkItem> {
 
 /// 清理垃圾（删除失败即跳过：文件占用等）
 #[tauri::command]
-pub fn clean_junk(paths: Vec<String>) {
+pub async fn clean_junk(paths: Vec<String>) {
     let count = paths.len();
     let dirs = crate::dirs::load_dirs();
     for p in &paths {
@@ -127,13 +127,18 @@ pub async fn cache_stats() -> serde_json::Value {
     })
 }
 
-/// 清理应用缓存（downloads / temp / logs 内容）
-#[tauri::command]
-pub fn clean_cache() {
+/// 清理应用缓存（downloads / temp / logs 内容）。托盘菜单同步调用此函数。
+pub(crate) fn clean_cache_inner() {
     let dirs = crate::dirs::load_dirs();
     clear_dir(&Path::new(&dirs.cache).join("downloads"));
     clear_dir(&Path::new(&dirs.cache).join("temp"));
     clear_dir(Path::new(&dirs.log));
+}
+
+/// 清理应用缓存（downloads / temp / logs 内容）
+#[tauri::command]
+pub async fn clean_cache() {
+    clean_cache_inner();
 }
 
 // ---------------------------------------------------------------------------

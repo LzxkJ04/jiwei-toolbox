@@ -66,7 +66,10 @@ export interface ChangelogEntry {
 export interface HwInfo {
   cpu: { name: string; cores: number; threads: number };
   memory_total: number;
+  /** 内存条明细（后端字段 memoryModules） */
+  memoryModules?: { manufacturer: string; capacity_gb: number; speed: number }[];
   board: string;
+  /** 显存单位 MB；0 表示未知（WMI 对大于 4GB 的卡经常溢出） */
   gpus: { name: string; vram: number }[];
   disks: { model: string; size: number }[];
 }
@@ -171,10 +174,10 @@ export interface DiskSmartInfo {
   serial: string;
   bus_type: string;
   media: string;
-  /** "Healthy" | "Warning" | "Unhealthy" 等原始状态串 */
+  /** OperationalStatus 原文，如 OK */
   status?: string;
-  /** 健康度估算（0~100），可能缺失 */
-  health?: number | null;
+  /** HealthStatus 原文（Healthy / Warning / Unhealthy）；兼容旧的数字健康度 */
+  health?: string | number | null;
   /** 摄氏温度，可能缺失 */
   temperature_c?: number | null;
   /** 通电小时数，可能缺失 */

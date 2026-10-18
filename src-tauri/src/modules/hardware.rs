@@ -128,7 +128,16 @@ fn bios_info() -> (String, String, String, String) {
     (mfr, product, ver, date)
 }
 
-/// 显卡列表（WMI Win32_VideoController：名称 + 显存）
+/// AdapterRAM（字节）→ MB。WMI 用 uint32，大于 4GB 的显卡常返回 -1 或溢出值，此时记 0（未知）。
+fn vram_mb(raw: f64) -> u64 {
+    const MAX_BYTES: f64 = 64.0 * 1024.0 * 1024.0 * 1024.0;
+    if raw <= 0.0 || raw > MAX_BYTES {
+        return 0;
+    }
+    (raw / 1_048_576.0).round() as u64
+}
+
+/// 显卡列表（WMI Win32_VideoController：名称 + 显存 MB）
 fn gpu_list() -> Vec<serde_json::Value> {
     let arr = as_array(ps_json(
         r#"@(Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM) | ConvertTo-Json -Compress"#,
@@ -137,7 +146,7 @@ fn gpu_list() -> Vec<serde_json::Value> {
         .iter()
         .map(|g| {
             let name = jstr(g, "Name", "");
-            let vram = jnum(g, "AdapterRAM", 0.0) as u64;
+            let vram = vram_mb(jnum(g, "AdapterRAM", 0.0));
             json!({ "name": if name.trim().is_empty() { "未知显卡".into() } else { name }, "vram": vram })
         })
         .collect();
@@ -275,7 +284,7 @@ pub fn cpu_burn_stop() {
 
 /// 磁盘测速：写 512MB 临时文件测写速，读回测读速，测毕删除
 #[tauri::command]
-pub fn disk_speed(path: String) -> Result<DiskSpeed, String> {
+pub async fn disk_speed(path: String) -> Result<DiskSpeed, String> {
     use std::io::{Read, Write};
 
     // 兼容多种输入：目录 / 盘符 "C" / "C:" / "C:\"；无效时回退系统临时目录
@@ -731,4 +740,23 @@ fn run_mem_test(app: tauri::AppHandle) {
             "seconds": start.elapsed().as_secs(),
         }),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::vram_mb;
+
+    #[test]
+    fn vram_bytes_to_mb() {
+        assert_eq!(vram_mb(8.0 * 1024.0 * 1024.0 * 1024.0), 8192);
+        assert_eq!(vram_mb(512.0 * 1024.0 * 1024.0), 512);
+    }
+
+    #[test]
+    fn vram_rejects_overflow_and_negative() {
+        // WMI uint32 溢出时常见 -1 或超大值
+        assert_eq!(vram_mb(-1.0), 0);
+        assert_eq!(vram_mb(0.0), 0);
+        assert_eq!(vram_mb(128.0 * 1024.0 * 1024.0 * 1024.0), 0);
+    }
 }

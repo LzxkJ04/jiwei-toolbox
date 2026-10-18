@@ -134,7 +134,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             "tray-pause" => software::pause_tasks(app.clone()),
             "tray-resume" => software::resume_tasks(app.clone()),
             "tray-clean" => {
-                cache::clean_cache();
+                cache::clean_cache_inner();
                 let _ = app.emit("tray-notify", "本地缓存已清理");
             }
             "tray-logs" => {
@@ -242,6 +242,8 @@ pub fn run() {
             systools::install_runtime,
             systools::list_uwp,
             systools::remove_uwp,
+            systools::get_env_vars,
+            systools::set_env_var,
             // 备份
             backup::create_backup,
             backup::list_backups,
