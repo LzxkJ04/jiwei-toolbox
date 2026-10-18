@@ -1,5 +1,10 @@
 # 极维工具箱
 
+[![Release](https://img.shields.io/github/v/release/LzxkJ04/jiwei-toolbox?label=release)](https://github.com/LzxkJ04/jiwei-toolbox/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/LzxkJ04/jiwei-toolbox/total)](https://github.com/LzxkJ04/jiwei-toolbox/releases)
+[![License](https://img.shields.io/github/license/LzxkJ04/jiwei-toolbox)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4)
+
 Windows 一站式系统运维工具箱：批量软件安装、本机软件清单备份、Geek 式深度卸载、硬件检测与烤机、系统环境修复、软件备份。面向装机、二手验机、系统重装运维人员。
 
 > 不内置任何激活/破解工具，许可证状态页仅只读查看系统激活状态。
