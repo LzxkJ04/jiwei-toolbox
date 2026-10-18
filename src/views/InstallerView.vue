@@ -12,10 +12,12 @@ import {
   onInstallerProgress,
   onInstallerDone,
   instDetectExisting,
+  installPrecheck,
   getEnvStatus as envStatus,
   type InstallerProgress,
   type InstallerDone,
   type ExistingInstall,
+  type PrecheckItem,
 } from "../lib/tauri";
 
 type Step = 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -95,8 +97,33 @@ let unWv2: (() => void) | null = null;
 import { onWebview2Progress, downloadWebview2, installWebview2 } from "../lib/tauri";
 const precheckDone = computed(() => wv2Checking.value === false && hasWv2.value);
 
+/** 真实环境预检结果（系统版本 / 架构 / 权限 / 磁盘） */
+const checks = ref<PrecheckItem[]>([]);
+const checksLoading = ref(false);
+/** 有 fail 项时禁止继续 */
+const hasFail = computed(() => checks.value.some((c) => c.level === "fail"));
+
+async function runChecks() {
+  checksLoading.value = true;
+  checks.value = (await installPrecheck(programDir.value.trim(), dataDir.value.trim())) ?? [];
+  checksLoading.value = false;
+}
+
+function levelIcon(level: string) {
+  if (level === "ok") return "✅";
+  if (level === "warn") return "⚠️";
+  return "❌";
+}
+
+function levelClass(level: string) {
+  if (level === "ok") return "text-emerald-500";
+  if (level === "warn") return "text-amber-500";
+  return "text-red-500";
+}
+
 async function runPrecheck() {
   wv2Checking.value = true;
+  void runChecks();
   try {
     const st = await envStatus();
     hasWv2.value = !!st?.has_webview2;
@@ -207,7 +234,7 @@ function canNext() {
   if (step.value === 0) return true;
   if (step.value === 1) return agree.value;
   if (step.value === 2) return dirOk.value;
-  if (step.value === 4) return precheckDone.value;
+  if (step.value === 4) return precheckDone.value && !hasFail.value;
   if (step.value === 5) return installDone.value;
   return true;
 }
@@ -358,23 +385,41 @@ function canNext() {
         <!-- 4 预检 -->
         <section v-else-if="step === 4" class="page-enter">
           <h2 class="text-2xl font-bold">系统依赖预检</h2>
+          <p class="mt-2 text-[13px] text-[var(--text-sub)]">
+            逐项检查安装环境，全部通过后才能继续。带 ❌ 的项必须处理。
+          </p>
           <div class="mt-5 space-y-3">
-            <div class="card flex items-center gap-3 p-4 text-sm">
-              <span class="text-emerald-500">✅</span> Windows 版本检测 —— 通过
+            <div v-if="checksLoading" class="card flex items-center gap-3 p-4 text-sm">
+              <span class="animate-pulse">⏳</span> 正在检查系统环境…
             </div>
+            <div v-for="c in checks" :key="c.id" class="card p-4 text-sm">
+              <div class="flex flex-wrap items-center gap-3">
+                <span :class="levelClass(c.level)">{{ levelIcon(c.level) }}</span>
+                <span class="font-medium">{{ c.label }}</span>
+                <span class="text-xs" :class="levelClass(c.level)">{{ c.detail }}</span>
+              </div>
+              <p v-if="c.hint" class="mt-1.5 pl-7 text-xs text-[var(--text-sub)]">{{ c.hint }}</p>
+            </div>
+
             <div class="card p-4 text-sm">
               <div class="flex items-center gap-3">
                 <span v-if="hasWv2" class="text-emerald-500">✅</span>
                 <span v-else-if="wv2Checking" class="animate-pulse">⏳</span>
                 <span v-else class="text-red-500">❌</span>
                 WebView2 运行时
-                <span v-if="hasWv2" class="text-xs text-[var(--text-sub)]">已安装</span>
+                <span v-if="hasWv2" class="text-xs text-[var(--text-sub)]">已就绪</span>
                 <span v-else-if="wv2Checking" class="text-xs text-[var(--text-sub)]">{{ wv2Msg || "检测中…" }}</span>
                 <span v-else class="text-xs text-red-500">检测/安装失败，可返回重试或手动安装后继续</span>
               </div>
               <div v-if="!hasWv2 && wv2Checking" class="mt-3 h-2 overflow-hidden rounded-full bg-[var(--border)]">
                 <div class="h-full rounded-full transition-all" :style="{ width: wv2Pct + '%', background: 'var(--primary)' }" />
               </div>
+            </div>
+
+            <div class="flex justify-end">
+              <Button variant="gray" size="sm" :disabled="checksLoading || wv2Checking" @click="runChecks">
+                重新检测
+              </Button>
             </div>
           </div>
         </section>

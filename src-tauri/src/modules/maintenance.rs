@@ -1,4 +1,4 @@
-//! 系统维护：回收站、电源计划、启动耗时
+//! 系统维护：回收站、电源计划、启动耗时、安装前环境预检
 
 use serde::Serialize;
 use std::os::windows::process::CommandExt;
@@ -195,6 +195,158 @@ try {
         // 毫秒 → 秒（四舍五入），最少 1 秒
         ms_to_secs(ms)
     }
+}
+
+#[derive(Serialize)]
+pub struct PrecheckItem {
+    /// 稳定标识，前端用来定位
+    pub id: String,
+    pub label: String,
+    /// "ok" | "warn" | "fail"
+    pub level: String,
+    /// 人类可读结果，例如「Windows 10 Pro 19045」
+    pub detail: String,
+    /// 失败时给出的处理建议
+    pub hint: String,
+}
+
+/// 安装前环境预检：系统版本、架构、管理员权限、WebView2、磁盘空间。
+/// 原来的向导把「Windows 版本检测 —— 通过」写死在前端，任何系统都显示通过。
+#[tauri::command]
+pub async fn install_precheck(program_dir: String, data_dir: String) -> Vec<PrecheckItem> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out = Vec::new();
+
+        // 1) 系统版本：Windows 10 1809 (build 17763) 以上才满足 WebView2 与 Tauri 要求
+        let (edition, build, arch) = read_windows_release();
+        let build_num: u32 = build.parse().unwrap_or(0);
+        let (level, detail, hint) = if build_num == 0 {
+            ("warn".to_string(), "无法读取系统版本".to_string(), "可继续安装，若运行异常请先升级系统".to_string())
+        } else if build_num < 17763 {
+            (
+                "fail".to_string(),
+                format!("{edition} 内部版本 {build}，低于要求的 17763"),
+                "Windows 10 1809 以下不受支持，请先升级系统".to_string(),
+            )
+        } else {
+            ("ok".to_string(), format!("{edition} 内部版本 {build}"), String::new())
+        };
+        out.push(PrecheckItem {
+            id: "os".into(),
+            label: "操作系统版本".into(),
+            level,
+            detail,
+            hint,
+        });
+
+        // 2) 架构：本程序是 x64 构建
+        let is64 = arch.contains("64");
+        out.push(PrecheckItem {
+            id: "arch".into(),
+            label: "系统架构".into(),
+            level: if is64 { "ok".into() } else { "fail".into() },
+            detail: if arch.is_empty() { "未知".into() } else { arch.clone() },
+            hint: if is64 { String::new() } else { "本程序仅支持 64 位系统".to_string() },
+        });
+
+        // 3) 管理员权限：安装到 Program Files 需要
+        let admin = crate::common::is_admin();
+        out.push(PrecheckItem {
+            id: "admin".into(),
+            label: "管理员权限".into(),
+            level: if admin { "ok".into() } else { "warn".into() },
+            detail: if admin { "已提升".into() } else { "普通权限".into() },
+            hint: if admin {
+                String::new()
+            } else {
+                "安装到 Program Files 可能需要管理员权限；选用户目录则可忽略".to_string()
+            },
+        });
+
+        // 4) WebView2
+        let wv2 = crate::common::has_webview2();
+        out.push(PrecheckItem {
+            id: "webview2".into(),
+            label: "WebView2 运行时".into(),
+            level: if wv2 { "ok".into() } else { "warn".into() },
+            detail: if wv2 { "已安装".into() } else { "未安装".into() },
+            hint: if wv2 { String::new() } else { "向导会自动下载安装，需要联网".to_string() },
+        });
+
+        // 5) 磁盘空间：程序与数据目录各需 500MB
+        const NEED: u64 = 500 * 1024 * 1024;
+        for (id, label, path) in [
+            ("disk_prog", "程序目录空间", program_dir),
+            ("disk_data", "数据目录空间", data_dir),
+        ] {
+            let free = free_space(&path);
+            let (level, detail, hint) = if free == 0 {
+                ("warn".to_string(), "无法读取".to_string(), "请确认路径所在磁盘可用".to_string())
+            } else if free < NEED {
+                (
+                    "fail".to_string(),
+                    format!("可用 {} MB", free / 1_048_576),
+                    "至少需要 500 MB，请更换目录或清理磁盘".to_string(),
+                )
+            } else {
+                ("ok".to_string(), format!("可用 {:.1} GB", free as f64 / 1073741824.0), String::new())
+            };
+            out.push(PrecheckItem { id: id.into(), label: label.into(), level, detail, hint });
+        }
+
+        out
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// 读系统版本与架构（注册表）
+fn read_windows_release() -> (String, String, String) {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+    let key = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+    let Ok(k) = key else {
+        return (String::new(), String::new(), String::new());
+    };
+    let edition = k
+        .get_value::<String, _>("ProductName")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let build = k
+        .get_value::<String, _>("CurrentBuildNumber")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    // 架构直接取环境变量，比注册表 BuildLabEx 可靠（后者不是所有版本都有）
+    let arch = std::env::var("PROCESSOR_ARCHITECTURE")
+        .or_else(|_| std::env::var("PROCESSOR_ARCHITEW6432"))
+        .unwrap_or_default();
+    (edition, build, arch)
+}
+
+/// 取路径所在磁盘可用字节；路径不存在时回溯到盘符根
+fn free_space(path: &str) -> u64 {
+    let mut probe = std::path::PathBuf::from(path.trim());
+    while !probe.exists() {
+        match probe.parent() {
+            Some(p) if p != probe => probe = p.to_path_buf(),
+            _ => break,
+        }
+    }
+    let s = probe.to_string_lossy();
+    if s.len() < 2 || s.as_bytes()[1] != b':' {
+        return 0;
+    }
+    let root = format!("{}\\", &s[..2]);
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    for d in disks.list() {
+        if d.mount_point().to_string_lossy().eq_ignore_ascii_case(&root) {
+            return d.available_space();
+        }
+    }
+    0
 }
 
 #[cfg(test)]

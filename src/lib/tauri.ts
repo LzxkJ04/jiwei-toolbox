@@ -585,6 +585,19 @@ export const listPowerPlans = () => tryCall<PowerPlan[]>("list_power_plans");
 export const setPowerPlan = (id: string) => invoke<null>("set_power_plan", { id });
 export const uptimeInfo = () => tryCall<UptimeInfo>("uptime_info");
 
+/** 安装前环境预检项 */
+export interface PrecheckItem {
+  id: string;
+  label: string;
+  /** "ok" | "warn" | "fail" */
+  level: string;
+  detail: string;
+  hint: string;
+}
+
+export const installPrecheck = (programDir: string, dataDir: string) =>
+  tryCall<PrecheckItem[]>("install_precheck", { programDir, dataDir });
+
 
 
 export const cpuBurnStart = (seconds: number) => tryCall<null>("cpu_burn_start", { seconds });

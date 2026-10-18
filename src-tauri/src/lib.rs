@@ -263,6 +263,7 @@ pub fn run() {
             maintenance::list_power_plans,
             maintenance::set_power_plan,
             maintenance::uptime_info,
+            maintenance::install_precheck,
             // 系统工具
             systools::list_startup,
             systools::list_disabled_startup,

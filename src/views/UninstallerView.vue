@@ -101,6 +101,10 @@ onBeforeUnmount(() => { /* 事件句柄已在完成/失败时清理 */ });
           <p class="mt-2 text-center text-[13px] text-[var(--text-sub)]">
             {{ keepData ? "用户数据已保留，可随时重新安装。" : "已清除全部程序文件与用户数据。" }}
           </p>
+          <p v-if="keepData && dataDir" class="mt-2 break-all text-center text-[11px] text-[var(--text-sub)]">
+            数据目录仍在：{{ dataDir }}<br />
+            如需彻底清除，可在文件资源管理器中手动删除该目录
+          </p>
           <Button variant="primary" class="mt-6" @click="closeWin">关闭窗口</Button>
         </div>
       </template>
