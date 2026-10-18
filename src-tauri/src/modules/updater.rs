@@ -5,17 +5,13 @@
 //! 404 / 网络失败 → 降级为 has_update: false，latest 回退当前版本。
 
 use serde_json::json;
-use std::time::Duration;
 
 const VERSION_URL: &str =
     "https://raw.githubusercontent.com/jiwei-toolbox/softwares/main/version.json";
 
 /// 拉取远程版本信息（失败/非 2xx 返回 None）
 fn fetch_version_json() -> Option<serde_json::Value> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .ok()?;
+    let client = crate::modules::netclient::build_client(std::time::Duration::from_secs(8));
     let resp = client.get(VERSION_URL).send().ok()?;
     if !resp.status().is_success() {
         return None;

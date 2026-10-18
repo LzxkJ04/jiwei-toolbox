@@ -12,6 +12,7 @@ pub mod inventory;
 pub mod license;
 pub mod logs;
 pub mod maintenance;
+pub mod netclient;
 pub mod software;
 pub mod startup_backup;
 pub mod systools;

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { Download, FolderOpen, Globe, RefreshCw, Upload } from "lucide-vue-next";
+import { Download, FolderOpen, Globe, Loader2, RefreshCw, Upload } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
 import Button from "../components/ui/Button.vue";
@@ -24,6 +24,8 @@ import {
   getDirs,
   chooseFile,
   openPath,
+  testProxy,
+  type ProxyTest,
   type Dirs,
 } from "../lib/tauri";
 import { formatBytes } from "../lib/utils";
@@ -304,6 +306,29 @@ async function saveProxy() {
   await persistSetting("proxy_port", proxyPort.value, "手动代理已保存");
 }
 
+/* ---- 代理连通性测试 ---- */
+const proxyTesting = ref(false);
+const proxyResult = ref<ProxyTest | null>(null);
+
+async function doTestProxy() {
+  if (proxyTesting.value) return;
+  proxyTesting.value = true;
+  proxyResult.value = null;
+  try {
+    proxyResult.value = await testProxy();
+  } catch (err) {
+    proxyResult.value = {
+      ok: false,
+      proxy: "",
+      from_system: false,
+      elapsed_ms: 0,
+      message: String(err),
+    };
+  } finally {
+    proxyTesting.value = false;
+  }
+}
+
 /** 重置：主题回默认 + 本地偏好清空 */
 async function doReset() {  theme.setMode("dark");
   theme.setAccent("blue");
@@ -527,13 +552,24 @@ async function doReset() {  theme.setMode("dark");
             </div>
             <Switch :checked="useProxy" @update:checked="toggleUseProxy" />
           </div>
-          <div class="flex items-center gap-3">
+          <div class="flex flex-wrap items-center gap-3">
             <p class="w-24 shrink-0 text-sm font-medium">手动代理</p>
             <Input v-model="proxyHost" placeholder="代理地址" class="max-w-[220px]" />
             <span class="text-[var(--muted)]">:</span>
             <Input v-model="proxyPort" placeholder="端口" class="max-w-[100px]" />
             <Button variant="gray" size="sm" @click="saveProxy">保存</Button>
+            <Button variant="gray" size="sm" :disabled="proxyTesting" @click="doTestProxy">
+              <Loader2 v-if="proxyTesting" class="h-3.5 w-3.5 animate-spin" />
+              测试连通性
+            </Button>
           </div>
+          <p v-if="proxyResult" class="text-xs" :class="proxyResult.ok ? 'text-[#30a46c]' : 'text-[#e5484d]'">
+            {{ proxyResult.ok ? "✓" : "✗" }} {{ proxyResult.message }}
+            <span v-if="proxyResult.proxy" class="ml-1 font-mono text-[var(--muted)]">（{{ proxyResult.proxy }}）</span>
+          </p>
+          <p class="text-[10px] text-[var(--muted)]">
+            代理设置对软件下载、运行库下载、WebView2 下载与更新检查全部生效；填写后请点保存。
+          </p>
         </div>
       </Card>
 

@@ -27,7 +27,7 @@ fn greet(name: &str) -> String {
     format!("你好, {}! 来自极维工具箱后端。", name)
 }
 
-use modules::{appicon, backup, cache, common, dirs, diskspace, drivers, hardware, inventory, license, logs, maintenance, software, sysmon, sysquick, systools, taskopts, uninstall, updater, webview2};
+use modules::{appicon, backup, cache, common, dirs, diskspace, drivers, hardware, inventory, license, logs, maintenance, netclient, software, sysmon, sysquick, systools, taskopts, uninstall, updater, webview2};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{MenuBuilder, MenuItem, PredefinedMenuItem},
@@ -264,6 +264,7 @@ pub fn run() {
             maintenance::set_power_plan,
             maintenance::uptime_info,
             maintenance::install_precheck,
+            netclient::test_proxy,
             // 系统工具
             systools::list_startup,
             systools::list_disabled_startup,

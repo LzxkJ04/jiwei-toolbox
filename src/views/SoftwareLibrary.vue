@@ -51,7 +51,14 @@ const visible = computed(() => {
   let list = store.items ?? [];
   if (category.value !== "全部") list = list.filter((i) => i.category === category.value);
   const q = search.value.trim().toLowerCase();
-  if (q) list = list.filter((i) => `${i.name} ${i.notes}`.toLowerCase().includes(q));
+  if (q) {
+    // 多关键词以空格分隔，全部命中才算匹配（如「压缩 免费」）
+    const terms = q.split(/\s+/).filter(Boolean);
+    list = list.filter((i) => {
+      const hay = `${i.name} ${i.notes} ${i.description ?? ""} ${i.category} ${i.license ?? ""} ${i.homepage ?? ""}`.toLowerCase();
+      return terms.every((t) => hay.includes(t));
+    });
+  }
   if (filter.value === "not-installed") list = list.filter((i) => store.statusOf(i) !== "installed");
   else if (filter.value === "fav") list = list.filter((i) => favorites.isFavorite(i.id));
   else if (filter.value === "open-free") list = list.filter((i) => store.licenseOf(i) !== "commercial");
@@ -154,7 +161,7 @@ function importList(e: Event) {
     <div class="mb-4 flex flex-wrap items-center gap-3">
       <div class="relative min-w-[220px] flex-1">
         <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
-        <Input v-model="search" placeholder="搜索软件名称或介绍…" class="!pl-9" />
+        <Input v-model="search" placeholder="搜索名称、简介、分类，空格分隔多个关键词" class="!pl-9" />
       </div>
       <div class="flex items-center gap-2">
         <ListFilter class="h-4 w-4 text-[var(--muted)]" />

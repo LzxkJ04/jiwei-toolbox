@@ -17,5 +17,15 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // 把第三方依赖单独切出来：体积稳定、可长期缓存，主包改代码不必重下
+        manualChunks: {
+          vue: ["vue", "pinia"],
+          radix: ["radix-vue"],
+          icons: ["lucide-vue-next"],
+        },
+      },
+    },
   },
 });

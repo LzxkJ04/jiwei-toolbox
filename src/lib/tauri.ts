@@ -600,6 +600,17 @@ export interface PrecheckItem {
 export const installPrecheck = (programDir: string, dataDir: string) =>
   tryCall<PrecheckItem[]>("install_precheck", { programDir, dataDir });
 
+/** 代理连通性测试 */
+export interface ProxyTest {
+  ok: boolean;
+  proxy: string;
+  from_system: boolean;
+  elapsed_ms: number;
+  message: string;
+}
+
+export const testProxy = () => invoke<ProxyTest>("test_proxy");
+
 
 
 export const cpuBurnStart = (seconds: number) => tryCall<null>("cpu_burn_start", { seconds });

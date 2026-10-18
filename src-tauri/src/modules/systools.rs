@@ -641,10 +641,8 @@ fn do_install_runtime(app: tauri::AppHandle, id: String, url: &str) -> Result<()
 
     // 下载（reqwest 默认读取 HTTP_PROXY/HTTPS_PROXY 环境变量走系统代理）
     emit("download", 0);
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
-        .map_err(|e| e.to_string())?;
+    // 走统一客户端构造，运行库下载同样遵循代理设置
+    let client = crate::modules::netclient::build_client(std::time::Duration::from_secs(600));
     let mut resp = client.get(url).send().map_err(|e| format!("下载失败: {}", e))?;
     if !resp.status().is_success() {
         return Err(format!("下载失败: HTTP {}", resp.status()));

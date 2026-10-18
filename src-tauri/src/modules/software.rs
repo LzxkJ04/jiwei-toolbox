@@ -330,12 +330,7 @@ pub async fn update_software_list() -> Result<UpdateListResult, String> {
         url = DEFAULT_SOFTWARE_SOURCE.into();
     }
     let dirs = crate::dirs::load_dirs();
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(60))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| format!("网络客户端初始化失败: {}", e))?;
+    let client = crate::modules::netclient::build_client(Duration::from_secs(60));
     let resp = client
         .get(&url)
         .send()
@@ -387,11 +382,7 @@ fn download_with_resume(
     id: &str,
     limiter: Option<&crate::taskopts::RateLimiter>,
 ) -> Result<(), String> {
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = crate::modules::netclient::build_client(Duration::from_secs(3600));
 
     let mut pos: u64 = dest.metadata().map(|m| m.len()).unwrap_or(0);
     loop {

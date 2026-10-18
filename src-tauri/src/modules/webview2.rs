@@ -64,11 +64,8 @@ fn download_webview2_blocking(app: &tauri::AppHandle) -> Result<String, String> 
     }
 
     // reqwest 默认读取 HTTP_PROXY/HTTPS_PROXY 等环境变量（系统代理）
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| format!("网络客户端初始化失败: {}", e))?;
+    // 走统一客户端构造，让设置里的代理对 WebView2 下载同样生效
+    let client = crate::modules::netclient::build_client(Duration::from_secs(600));
 
     let mut resp = client
         .get(WEBVIEW2_URL)
