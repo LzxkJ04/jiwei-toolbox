@@ -13,17 +13,18 @@ import EmptyState from "../components/ui/EmptyState.vue";
 import ConfirmDialog from "../components/ui/ConfirmDialog.vue";
 import {
   cancelScan, deleteSpaceItem, dirUsage, diskOverview, emptyDirContents, emptyRecycleBin,
-  revealPath, scanLargeFiles,
-  type DiskOverview, type SpaceEntry,
+  revealPath, scanDuplicates, scanLargeFiles,
+  type DiskOverview, type DuplicateGroup, type SpaceEntry,
 } from "../lib/tauri";
 import { formatBytes } from "../lib/utils";
 import { toast } from "../lib/toast";
 
-type Tab = "overview" | "browser" | "large";
+type Tab = "overview" | "browser" | "large" | "dup";
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "磁盘概览" },
   { id: "browser", label: "目录占用" },
   { id: "large", label: "大文件" },
+  { id: "dup", label: "重复文件" },
 ];
 const tab = ref<Tab>("overview");
 
@@ -214,12 +215,63 @@ async function doEmptyBin() {
   }
 }
 
+/* ============ 重复文件 ============ */
+
+const dupRoot = ref("");
+const dupMinKb = ref("64");
+const dupGroups = ref<DuplicateGroup[]>([]);
+const dupLoading = ref(false);
+const dupScanned = ref(false);
+
+const DUP_MIN_OPTS = [
+  { value: "1", label: "≥ 1 KB" },
+  { value: "64", label: "≥ 64 KB" },
+  { value: "1024", label: "≥ 1 MB" },
+  { value: "10240", label: "≥ 10 MB" },
+];
+
+const dupWasted = computed(() => dupGroups.value.reduce((s, g) => s + g.wasted, 0));
+const dupFileCount = computed(() =>
+  dupGroups.value.reduce((s, g) => s + Math.max(0, g.paths.length - 1), 0)
+);
+
+async function runDup() {
+  const root = (dupRoot.value || currentPath.value || "").trim();
+  if (!root) {
+    toast("请先选择或填写要扫描的目录", "warning");
+    return;
+  }
+  dupLoading.value = true;
+  dupGroups.value = [];
+  dupScanned.value = false;
+  try {
+    const groups = await scanDuplicates(root, Number(dupMinKb.value));
+    dupGroups.value = groups ?? [];
+    dupScanned.value = true;
+  } catch (err) {
+    toast(String(err), "error");
+  } finally {
+    dupLoading.value = false;
+  }
+}
+
+function dupFileName(p: string) {
+  const seg = p.split(/[\\/]/);
+  return seg[seg.length - 1] || p;
+}
+
+function dupDir(p: string) {
+  const i = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
+  return i > 0 ? p.slice(0, i) : p;
+}
+
 /* ============ 初始化 ============ */
 
 onMounted(async () => {
   await loadDisks();
   const home = disks.value[0]?.mount || "C:\\";
   largeRoot.value = home;
+  dupRoot.value = home;
 });
 
 onUnmounted(() => {
@@ -454,6 +506,84 @@ onUnmounted(() => {
       @update:open="(v) => !v && (pendingDelete = null)"
       @confirm="confirmDelete"
     />
+
+    <!-- 重复文件 -->
+    <div v-show="tab === 'dup'" class="space-y-3">
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="min-w-[220px] flex-1">
+          <Input v-model="dupRoot" placeholder="要扫描的目录，如 D:\下载" />
+        </div>
+        <Select v-model="dupMinKb" :options="DUP_MIN_OPTS" class="w-32" />
+        <Button variant="primary" size="sm" :disabled="dupLoading" @click="runDup">
+          <Loader2 v-if="dupLoading" class="h-3.5 w-3.5 animate-spin" />
+          <Search v-else class="h-3.5 w-3.5" />
+          {{ dupLoading ? "扫描中" : "查找重复" }}
+        </Button>
+        <Button v-if="dupLoading" variant="danger" size="sm" @click="stopScan">
+          <X class="h-3.5 w-3.5" /> 停止
+        </Button>
+      </div>
+
+      <Spinner v-if="dupLoading" label="先按大小分桶，再逐组比对内容…" />
+      <EmptyState
+        v-else-if="!dupScanned"
+        icon="🧬"
+        text="找出内容完全相同的文件"
+        sub="先按文件大小分组，同尺寸才计算 SHA-256，所以不会把同名不同内容的文件误判成重复。"
+      />
+      <EmptyState
+        v-else-if="!dupGroups.length"
+        icon="✅"
+        text="没有发现重复文件"
+        sub="可以调低体积阈值或换一个目录再扫。"
+      />
+      <template v-else>
+        <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] px-4 py-2 text-xs text-[var(--muted)]">
+          发现 {{ dupGroups.length }} 组重复，共 {{ dupFileCount }} 个多余副本，最多可回收
+          <b class="text-[var(--primary)]">{{ formatBytes(dupWasted) }}</b>
+        </div>
+        <Card class="p-0">
+          <div class="max-h-[60vh] divide-y divide-[var(--card-border)] overflow-y-auto">
+            <div v-for="g in dupGroups" :key="g.hash" class="p-3">
+              <div class="mb-1.5 flex flex-wrap items-center gap-2 text-xs">
+                <span class="rounded bg-[var(--primary-soft)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--primary)]">
+                  {{ g.hash.slice(0, 8) }}
+                </span>
+                <span class="font-medium text-[var(--text-strong)]">{{ formatBytes(g.size) }} × {{ g.paths.length }}</span>
+                <span class="text-[var(--muted)]">可回收 {{ formatBytes(g.wasted) }}</span>
+              </div>
+              <div v-for="(p, i) in g.paths" :key="p" class="flex items-center gap-2 rounded px-1 py-0.5 text-xs hover:bg-[var(--card-soft)]">
+                <span
+                  class="w-10 shrink-0 text-center text-[10px]"
+                  :class="i === 0 ? 'text-[#30a46c]' : 'text-[var(--muted)]'"
+                >
+                  {{ i === 0 ? "保留" : "副本" }}
+                </span>
+                <span class="min-w-0 flex-1 truncate" :title="p">{{ dupFileName(p) }}</span>
+                <span class="hidden max-w-[45%] shrink-0 truncate text-[var(--muted)] sm:inline" :title="dupDir(p)">
+                  {{ dupDir(p) }}
+                </span>
+                <Button variant="gray" size="sm" title="在资源管理器中显示" @click="reveal(p)">
+                  <FolderOpen class="h-3 w-3" />
+                </Button>
+                <Button
+                  v-if="i > 0"
+                  variant="danger"
+                  size="sm"
+                  title="删除这个副本"
+                  @click="pendingDelete = { name: dupFileName(p), path: p, size: g.size, kind: 'file', files: 1 }"
+                >
+                  <Trash2 class="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
+          </div>
+        </Card>
+      </template>
+      <p class="text-[10px] text-[var(--muted)]">
+        每组固定保留第一个文件，只允许删后面的副本。删除不进回收站。扫描最多访问 40 万个条目。
+      </p>
+    </div>
 
     <ConfirmDialog
       :open="showBin"

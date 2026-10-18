@@ -40,6 +40,7 @@ fn with_usage<T>(f: impl FnOnce(&mut UsageState) -> T) -> Option<T> {
 fn collect_usage() -> serde_json::Value {
     let fallback = json!({
         "cpu_pct": 0.0,
+        "per_core": [],
         "mem_used": 0u64,
         "mem_total": 0u64,
         "swap_used": 0u64,
@@ -92,8 +93,16 @@ fn collect_usage() -> serde_json::Value {
         }
 
         let cpu = st.sys.global_cpu_usage();
+        // 每核占用：调度器把负载摊到各核，单核打满时总占用看不出来
+        let per_core: Vec<f64> = st
+            .sys
+            .cpus()
+            .iter()
+            .map(|c| (c.cpu_usage() as f64 * 10.0).round() / 10.0)
+            .collect();
         json!({
             "cpu_pct": (cpu * 10.0).round() / 10.0,
+            "per_core": per_core,
             "mem_used": st.sys.used_memory(),
             "mem_total": st.sys.total_memory(),
             "swap_used": st.sys.used_swap(),

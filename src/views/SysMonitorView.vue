@@ -53,6 +53,9 @@ const swapPct = computed(() => {
 });
 const maxNet = computed(() => Math.max(1, ...downHistory.value, ...upHistory.value));
 
+/** 每核占用：超过 8 核时按两列折行，避免单行挤成一条线 */
+const perCore = computed(() => usage.value?.per_core ?? []);
+
 /** 折线图路径。values 已是 0-100 或原始值，按 max 归一化。 */
 function linePath(values: number[], max = 100) {
   if (values.length < 2) return "";
@@ -438,6 +441,29 @@ onUnmounted(() => {
           <div class="h-full rounded-full" :style="{ width: `${swapPct}%`, background: barColor(swapPct) }" />
         </div>
       </div>
+
+      <!-- 每核占用 -->
+      <Card v-if="perCore.length" class="p-4">
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p class="text-sm font-semibold">各核心占用</p>
+          <span class="text-xs text-[var(--muted)]">{{ perCore.length }} 个逻辑核心</span>
+        </div>
+        <div class="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3 lg:grid-cols-4">
+          <div v-for="(v, i) in perCore" :key="i" class="flex items-center gap-2">
+            <span class="w-9 shrink-0 text-right text-[10px] tabular-nums text-[var(--muted)]">#{{ i }}</span>
+            <div class="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--btn-gray)]">
+              <div
+                class="h-full rounded-full transition-[width] duration-300"
+                :style="{ width: `${Math.min(100, v)}%`, background: barColor(v) }"
+              />
+            </div>
+            <span class="w-8 shrink-0 text-right text-[10px] tabular-nums text-[var(--muted)]">{{ v.toFixed(0) }}%</span>
+          </div>
+        </div>
+        <p class="mt-2 text-[10px] text-[var(--muted)]">
+          单核打满时总占用可能不高，这里能看出是不是某个核心独占。
+        </p>
+      </Card>
 
       <p class="text-[10px] text-[var(--muted)]">每 1.5 秒采样一次，保留最近 60 个点（约 90 秒）。页面切走时暂停采集。</p>
     </div>

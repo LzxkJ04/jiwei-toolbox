@@ -1,4 +1,4 @@
-//! 磁盘空间：目录占用排行、大文件扫描
+//! 磁盘空间：目录占用排行、大文件扫描、重复文件检测
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -280,9 +280,115 @@ pub async fn empty_dir_contents(path: String) -> Result<u64, String> {
     Ok(freed)
 }
 
+// ---------- 重复文件 ----------
+
+/// 一组内容完全相同的文件
+#[derive(Serialize, Clone)]
+pub struct DuplicateGroup {
+    /// 内容哈希（前 16 位十六进制，仅供前端去重展示）
+    pub hash: String,
+    pub size: u64,
+    /// 所有副本的完整路径（至少 2 个）
+    pub paths: Vec<String>,
+    /// 除保留份以外可回收的字节数
+    pub wasted: u64,
+}
+
+/// 把「同尺寸候选」按内容分组。纯函数，便于单测。
+/// candidates: (路径, 尺寸)，已按尺寸分好组的同一尺寸集合内调用。
+fn group_duplicates(candidates: &[(String, u64)]) -> Vec<DuplicateGroup> {
+    use std::collections::HashMap;
+    let mut by_hash: HashMap<String, Vec<String>> = HashMap::new();
+    for (path, _) in candidates {
+        // 读不出内容就跳过，不把它当成重复
+        let Ok(bytes) = std::fs::read(path) else { continue };
+        let hash = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
+        by_hash.entry(hash[..16].to_string()).or_default().push(path.clone());
+    }
+    let mut out: Vec<DuplicateGroup> = by_hash
+        .into_iter()
+        .filter(|(_, paths)| paths.len() > 1)
+        .map(|(hash, paths)| {
+            let size = candidates
+                .iter()
+                .find(|(p, _)| p == &paths[0])
+                .map(|(_, s)| *s)
+                .unwrap_or(0);
+            let wasted = size * (paths.len() as u64 - 1);
+            DuplicateGroup { hash, size, paths, wasted }
+        })
+        .collect();
+    // 可回收空间大的排前面
+    out.sort_by(|a, b| b.wasted.cmp(&a.wasted));
+    out
+}
+
+static DUP_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// 扫描重复文件的同步实现：先按大小分桶，只对同尺寸文件算 SHA-256。
+fn collect_duplicates(root: PathBuf, min_bytes: u64) -> Vec<DuplicateGroup> {
+    let mut by_size: HashMap<u64, Vec<String>> = HashMap::new();
+    let mut stack = vec![root];
+    let mut visited = 0u64;
+    while let Some(cur) = stack.pop() {
+        if SCAN_CANCEL.load(Ordering::Relaxed) || visited > 400_000 {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&cur) else { continue };
+        for entry in rd.flatten() {
+            visited += 1;
+            let Ok(md) = entry.metadata() else { continue };
+            if md.file_type().is_symlink() {
+                continue;
+            }
+            if md.is_dir() {
+                stack.push(entry.path());
+            } else if md.is_file() && md.len() >= min_bytes {
+                by_size
+                    .entry(md.len())
+                    .or_default()
+                    .push(entry.path().to_string_lossy().to_string());
+            }
+        }
+    }
+    // 只有同尺寸且至少 2 个的桶才值得算哈希
+    let mut out = Vec::new();
+    for (size, paths) in by_size {
+        if paths.len() < 2 {
+            continue;
+        }
+        let cand: Vec<(String, u64)> = paths.into_iter().map(|p| (p, size)).collect();
+        out.extend(group_duplicates(&cand));
+    }
+    out.sort_by(|a, b| b.wasted.cmp(&a.wasted));
+    // 限制返回条数，避免一次渲染上千行
+    out.truncate(300);
+    out
+}
+
+/// 扫描重复文件。
+/// min_kb 用来跳过大量小文件（默认 1KB 以上）。
+#[tauri::command]
+pub async fn scan_duplicates(path: String, min_kb: u64) -> Result<Vec<DuplicateGroup>, String> {
+    let root = PathBuf::from(path.trim());
+    if !root.is_dir() {
+        return Err("目录不存在".into());
+    }
+    if DUP_RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("已有重复扫描在进行中".into());
+    }
+    SCAN_CANCEL.store(false, Ordering::SeqCst);
+    let min_bytes = min_kb.max(1) * 1024;
+    let res = tauri::async_runtime::spawn_blocking(move || collect_duplicates(root, min_bytes))
+        .await
+        .unwrap_or_default();
+    DUP_RUNNING.store(false, Ordering::SeqCst);
+    Ok(res)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::dir_size;
+    use super::{collect_duplicates, dir_size, group_duplicates};
     use std::sync::atomic::{AtomicBool, AtomicU64};
 
     #[test]
@@ -307,6 +413,70 @@ mod tests {
         let (size, files) = dir_size(&base, &AtomicBool::new(true), &AtomicU64::new(0));
         assert_eq!(files, 0);
         assert_eq!(size, 0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn duplicate_groups_need_identical_bytes() {
+        let base = std::env::temp_dir().join("jw_dup_test");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("a.txt"), b"same-content").unwrap();
+        std::fs::write(base.join("b.txt"), b"same-content").unwrap();
+        // 同长度但内容不同，不能被判成重复
+        std::fs::write(base.join("c.txt"), b"diff-content").unwrap();
+
+        let cand: Vec<(String, u64)> = ["a.txt", "b.txt", "c.txt"]
+            .iter()
+            .map(|n| {
+                let p = base.join(n);
+                let len = std::fs::metadata(&p).unwrap().len();
+                (p.to_string_lossy().to_string(), len)
+            })
+            .collect();
+        let groups = group_duplicates(&cand);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].paths.len(), 2);
+        assert_eq!(groups[0].size, 12);
+        assert_eq!(groups[0].wasted, 12);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn single_file_is_not_a_group() {
+        let base = std::env::temp_dir().join("jw_dup_single");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let p = base.join("only.txt");
+        std::fs::write(&p, b"unique").unwrap();
+        let cand = vec![(p.to_string_lossy().to_string(), 6u64)];
+        assert!(group_duplicates(&cand).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 真实目录端到端：同内容归一组、同长度不同内容不误判、小于阈值跳过
+    #[test]
+    fn collect_duplicates_walks_real_dirs() {
+        let base = std::env::temp_dir().join("jw_dup_walk");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("a/nested")).unwrap();
+        std::fs::create_dir_all(base.join("b")).unwrap();
+        let payload = vec![7u8; 4096];
+        std::fs::write(base.join("a/one.bin"), &payload).unwrap();
+        std::fs::write(base.join("a/nested/two.bin"), &payload).unwrap();
+        std::fs::write(base.join("b/three.bin"), &payload).unwrap();
+        // 同长度不同内容
+        let mut other = payload.clone();
+        other[0] = 9;
+        std::fs::write(base.join("b/other.bin"), &other).unwrap();
+        // 小于阈值，应被跳过
+        std::fs::write(base.join("b/tiny.bin"), b"xy").unwrap();
+
+        let groups = collect_duplicates(base.clone(), 1024);
+        assert_eq!(groups.len(), 1, "应该只有一组真重复");
+        assert_eq!(groups[0].paths.len(), 3);
+        assert_eq!(groups[0].size, 4096);
+        assert_eq!(groups[0].wasted, 8192);
         let _ = std::fs::remove_dir_all(&base);
     }
 }

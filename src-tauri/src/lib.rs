@@ -249,6 +249,7 @@ pub fn run() {
             diskspace::delete_space_item,
             diskspace::reveal_path,
             diskspace::empty_dir_contents,
+            diskspace::scan_duplicates,
             // 快捷工具：端口 / 系统入口 / 定时关机
             sysquick::list_ports,
             sysquick::open_system_tool,

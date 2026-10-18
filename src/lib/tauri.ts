@@ -167,6 +167,8 @@ export interface HwUsage {
 /** 系统监控：实时占用 + 网络速率 */
 export interface SysUsage {
   cpu_pct: number;
+  /** 每个逻辑核心的占用率，顺序与系统 CPU 编号一致 */
+  per_core?: number[];
   mem_used: number;
   mem_total: number;
   swap_used: number;
@@ -216,6 +218,15 @@ export interface SpaceEntry {
   /** "dir" | "file" */
   kind: string;
   files: number;
+}
+
+/** 内容完全相同的文件分组 */
+export interface DuplicateGroup {
+  hash: string;
+  size: number;
+  paths: string[];
+  /** 除保留一份外可回收的字节数 */
+  wasted: number;
 }
 
 export interface DiskOverview {
@@ -518,6 +529,9 @@ export const cancelScan = () => invoke<null>("cancel_scan").catch(() => null);
 export const deleteSpaceItem = (path: string) => invoke<null>("delete_space_item", { path });
 export const revealPath = (path: string) => invoke<null>("reveal_path", { path });
 export const emptyDirContents = (path: string) => invoke<number>("empty_dir_contents", { path });
+/** 扫描重复文件；先按大小分桶再算 SHA-256 */
+export const scanDuplicates = (path: string, minKb = 1) =>
+  invoke<DuplicateGroup[]>("scan_duplicates", { path, minKb });
 
 /* ---- 快捷工具 ---- */
 
