@@ -318,7 +318,88 @@ fn validate_software_list(text: &str) -> Result<Vec<Software>, String> {
             .map_err(|e| format!("清单第 {} 条结构无效: {}", i + 1, e))?;
         list.push(sw);
     }
+    // 依赖必须指向清单内真实存在的 id，且不能成环
+    let ids: std::collections::HashSet<String> = list.iter().map(|s| s.id.clone()).collect();
+    for s in &list {
+        for d in &s.depends {
+            if d == &s.id {
+                return Err(format!("「{}」把自己列为依赖", s.name));
+            }
+            if !ids.contains(d) {
+                return Err(format!("「{}」的依赖 {} 在清单中不存在", s.name, d));
+            }
+        }
+    }
+    if let Some(cycle) = find_dependency_cycle(&list) {
+        return Err(format!("依赖关系存在循环：{}", cycle.join(" → ")));
+    }
     Ok(list)
+}
+
+/// 深度优先找依赖环，返回环上的节点名（用于报错提示）。无环返回 None。
+fn find_dependency_cycle(list: &[Software]) -> Option<Vec<String>> {
+    use std::collections::HashMap;
+    let names: HashMap<&str, &str> =
+        list.iter().map(|s| (s.id.as_str(), s.name.as_str())).collect();
+    let edges: HashMap<&str, &[String]> = list
+        .iter()
+        .map(|s| (s.id.as_str(), s.depends.as_slice()))
+        .collect();
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mark {
+        Visiting,
+        Done,
+    }
+    let mut state: HashMap<&str, Mark> = HashMap::new();
+    let mut stack: Vec<&str> = Vec::new();
+
+    fn dfs<'a>(
+        node: &'a str,
+        edges: &HashMap<&'a str, &'a [String]>,
+        state: &mut HashMap<&'a str, Mark>,
+        stack: &mut Vec<&'a str>,
+    ) -> Option<Vec<&'a str>> {
+        match state.get(node) {
+            Some(Mark::Done) => return None,
+            Some(Mark::Visiting) => {
+                // 找到环：从栈里截取到当前节点
+                if let Some(pos) = stack.iter().position(|x| *x == node) {
+                    let mut cyc: Vec<&str> = stack[pos..].to_vec();
+                    cyc.push(node);
+                    return Some(cyc);
+                }
+                return Some(vec![node]);
+            }
+            None => {}
+        }
+        state.insert(node, Mark::Visiting);
+        stack.push(node);
+        if let Some(next) = edges.get(node) {
+            for n in next.iter() {
+                if let Some(c) = dfs(n.as_str(), edges, state, stack) {
+                    return Some(c);
+                }
+            }
+        }
+        stack.pop();
+        state.insert(node, Mark::Done);
+        None
+    }
+
+    for s in list {
+        if state.contains_key(s.id.as_str()) {
+            continue;
+        }
+        if let Some(cyc) = dfs(s.id.as_str(), &edges, &mut state, &mut stack) {
+            return Some(
+                cyc.into_iter()
+                    .map(|id| names.get(id).copied().unwrap_or(id).to_string())
+                    .collect(),
+            );
+        }
+    }
+    None
 }
 
 /// 从远程源拉取软件清单 → 校验结构 → 写入缓存 softwares.json
@@ -774,6 +855,58 @@ mod tests {
         assert_eq!(list[0].silent_args, "/qn");
         assert_eq!(list[0].sha256, "deadbeef");
         assert!((list[0].size_mb - 120.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn depends_must_reference_existing_id() {
+        let text = concat!(
+            r#"[{"id":"a","name":"A","url":"https://e.com/a.exe","depends":["ghost"]}]"#
+        );
+        let err = validate_software_list(text).unwrap_err();
+        assert!(err.contains("不存在"), "应提示依赖不存在，实际: {err}");
+    }
+
+    #[test]
+    fn depends_self_reference_rejected() {
+        let text = r#"[{"id":"a","name":"A","url":"https://e.com/a.exe","depends":["a"]}]"#;
+        let err = validate_software_list(text).unwrap_err();
+        assert!(err.contains("自己"), "应提示自依赖，实际: {err}");
+    }
+
+    #[test]
+    fn depends_cycle_is_rejected() {
+        // a → b → c → a 构成环，必须拒绝，否则前端补齐依赖时会绕不出去
+        let text = concat!(
+            r#"[{"id":"a","name":"A","url":"https://e.com/a.exe","depends":["b"]},"#,
+            r#"{"id":"b","name":"B","url":"https://e.com/b.exe","depends":["c"]},"#,
+            r#"{"id":"c","name":"C","url":"https://e.com/c.exe","depends":["a"]}]"#
+        );
+        let err = validate_software_list(text).unwrap_err();
+        assert!(err.contains("循环"), "应提示依赖循环，实际: {err}");
+        // 报错里应带上软件名而不是裸 id
+        assert!(err.contains("A") || err.contains("B") || err.contains("C"));
+    }
+
+    #[test]
+    fn valid_dependency_chain_passes() {
+        // potplayer → k-lite → vlc 这种真实链条应通过
+        let text = concat!(
+            r#"[{"id":"vlc","name":"VLC","url":"https://e.com/vlc.exe"},"#,
+            r#"{"id":"k-lite","name":"K-Lite","url":"https://e.com/kl.exe","depends":["vlc"]},"#,
+            r#"{"id":"potplayer","name":"PotPlayer","url":"https://e.com/p.exe","depends":["k-lite"]}]"#
+        );
+        let list = validate_software_list(text).expect("无环依赖链应通过");
+        assert_eq!(list.len(), 3);
+        let pot = list.iter().find(|s| s.id == "potplayer").unwrap();
+        assert_eq!(pot.depends, vec!["k-lite".to_string()]);
+    }
+
+    #[test]
+    fn bundled_catalog_is_valid() {
+        // 随包分发的清单必须自身合法（依赖存在、无环）
+        let text = include_str!("../../resources/softwares.json");
+        let list = validate_software_list(text).expect("内置清单应通过校验");
+        assert!(!list.is_empty());
     }
 
     #[test]

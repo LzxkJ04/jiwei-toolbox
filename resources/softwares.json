@@ -248,7 +248,9 @@
         "notes": "解码器与字幕功能更新"
       }
     ],
-    "depends": [],
+    "depends": [
+      "k-lite"
+    ],
     "md5": ""
   },
   {
@@ -271,7 +273,9 @@
         "notes": "MPC-HC 与解码器组件更新"
       }
     ],
-    "depends": [],
+    "depends": [
+      "vlc"
+    ],
     "md5": ""
   },
   {
@@ -547,7 +551,9 @@
         "notes": "编码器与性能改进"
       }
     ],
-    "depends": [],
+    "depends": [
+      "k-lite"
+    ],
     "md5": ""
   },
   {

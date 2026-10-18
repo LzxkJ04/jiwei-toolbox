@@ -7,6 +7,7 @@ import Input from "../components/ui/Input.vue";
 import Select from "../components/ui/Select.vue";
 import Spinner from "../components/ui/Spinner.vue";
 import EmptyState from "../components/ui/EmptyState.vue";
+import Dialog from "../components/ui/Dialog.vue";
 import SoftwareCard from "../components/SoftwareCard.vue";
 import SoftwareDetailDialog from "../components/SoftwareDetailDialog.vue";
 import type { SoftwareItem } from "../lib/tauri";
@@ -104,10 +105,27 @@ function addToQueue() {
   if (checked.value.size === 0) return;
   const items = (store.items ?? []).filter((i) => checked.value.has(i.id));
   const n = tasks.addFromSoftware(items);
-  toast(
-    n > 0 ? `已将 ${n} 个软件加入任务队列` : "所选软件均已在任务队列中",
-    n > 0 ? "success" : "info"
-  );
+  if (n === 0) {
+    toast("所选软件均已在任务队列中", "info");
+    return;
+  }
+  // 依赖检查：缺依赖单独提示，给一键补齐入口
+  const missingDeps = tasks.missingDependencies(items, store.items ?? []);
+  if (missingDeps.length > 0) {
+    pendingDeps.value = missingDeps;
+    toast(`已将 ${n} 个软件加入任务队列，但有 ${missingDeps.length} 个依赖未安装`, "warning");
+    return;
+  }
+  toast(`已将 ${n} 个软件加入任务队列`, "success");
+}
+
+/** 缺失依赖提示 */
+const pendingDeps = ref<SoftwareItem[]>([]);
+
+function addDepsToQueue() {
+  const n = tasks.addFromSoftware(pendingDeps.value);
+  pendingDeps.value = [];
+  if (n > 0) toast(`已补入 ${n} 个依赖，建议先安装依赖`, "success");
 }
 
 /** 导出清单：勾选 id 列表下载为 JSON */
@@ -230,5 +248,29 @@ function importList(e: Event) {
 
     <!-- 详情弹窗 -->
     <SoftwareDetailDialog v-model:open="detailOpen" :item="detailItem" />
+
+    <!-- 缺失依赖提示 -->
+    <Dialog
+      :open="pendingDeps.length > 0"
+      title="缺少依赖"
+      class="!max-w-md"
+      @update:open="(v) => !v && (pendingDeps = [])"
+    >
+      <p class="text-sm leading-relaxed">
+        刚加入的软件依赖以下组件，但本机尚未安装、队列里也没有：
+      </p>
+      <div class="mt-3 space-y-1 rounded-xl border border-[#f5a62355] bg-[#f5a6231a] p-3">
+        <p v-for="d in pendingDeps" :key="d.id" class="text-xs text-[#b57d10]">· {{ d.name }}</p>
+      </div>
+      <p class="mt-2 text-xs text-[var(--muted)]">
+        依赖缺失时主软件可能装上却无法启动。建议一并安装。
+      </p>
+      <template #footer>
+        <div class="flex flex-wrap justify-end gap-3">
+          <Button variant="gray" @click="pendingDeps = []">忽略</Button>
+          <Button variant="primary" @click="addDepsToQueue">一并加入（{{ pendingDeps.length }}）</Button>
+        </div>
+      </template>
+    </Dialog>
   </div>
 </template>

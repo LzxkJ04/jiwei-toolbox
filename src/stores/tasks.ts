@@ -167,6 +167,26 @@ export const useTasksStore = defineStore("tasks", {
       }
       return added;
     },
+    /**
+     * 解析待装软件的依赖，返回「未安装且不在队列」的软件条目。
+     * 调用方据此提示或自动补队列——依赖装不上会导致主软件安装成功却跑不起来。
+     */
+    missingDependencies(items: SoftwareItem[], catalog: SoftwareItem[]): SoftwareItem[] {
+      const need = new Map<string, SoftwareItem>();
+      const byId = new Map(catalog.map((c) => [c.id, c]));
+      for (const s of items) {
+        for (const depId of s.depends ?? []) {
+          if (!depId || depId === s.id) continue;
+          if (this.tasks.some((t) => t.id === depId)) continue;
+          const dep = byId.get(depId);
+          // 清单里没有这个依赖也无法处理，跳过
+          if (!dep) continue;
+          if (items.some((i) => i.id === depId)) continue;
+          need.set(depId, dep);
+        }
+      }
+      return [...need.values()];
+    },
     /** 加入卸载 / 备份等任务（无后端引擎的类型本地模拟推进） */
     addTask(name: string, kind: TaskKind) {
       const id = `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;

@@ -44,13 +44,28 @@ const silentSupported = computed(
   () => !!(props.item?.silentArgs && props.item.silentArgs.trim())
 );
 
-/** 依赖项名称映射（id → 清单名称） */
-const dependsNames = computed(() => {
+/** 依赖明细：是否已安装、是否已在队列，用于给出可执行的下一步 */
+const dependsDetail = computed(() => {
   if (!props.item?.depends?.length) return [];
-  return props.item.depends.map(
-    (id) => (store.items ?? []).find((s) => s.id === id)?.name ?? id
-  );
+  return props.item.depends.map((id) => {
+    const item = (store.items ?? []).find((s) => s.id === id);
+    const name = item?.name ?? id;
+    const installed = item ? store.statusOf(item) === "installed" : false;
+    const queued = tasks.tasks.some((t) => t.id === id);
+    return { id, name, item, installed, queued };
+  });
 });
+
+/** 尚未满足（未安装且不在队列）的依赖 */
+const missingDepends = computed(() => dependsDetail.value.filter((d) => !d.installed && !d.queued));
+
+/** 把缺失依赖一并加入队列 */
+function addMissingDepends() {
+  const items = missingDepends.value.map((d) => d.item).filter((x): x is NonNullable<typeof x> => !!x);
+  if (items.length === 0) return;
+  const n = tasks.addFromSoftware(items);
+  toast(n > 0 ? `已加入 ${n} 个依赖项到任务队列` : "依赖项已在任务队列中", n > 0 ? "success" : "info");
+}
 
 const sizeLabel = computed(() => {
   const mb = props.item?.size_mb ?? 0;
@@ -257,17 +272,37 @@ async function openSoftware() {
           </div>
         </div>
 
-        <!-- 依赖提示黄卡 -->
+        <!-- 依赖提示：区分已装 / 待装 -->
         <div
-          v-if="dependsNames.length > 0"
-          class="flex items-start gap-2 rounded-xl border border-[#f5a62355] bg-[#f5a6231a] p-3 text-xs leading-relaxed text-[#b57d10]"
+          v-if="dependsDetail.length > 0"
+          class="rounded-xl border p-3 text-xs leading-relaxed"
+          :class="missingDepends.length
+            ? 'border-[#f5a62355] bg-[#f5a6231a] text-[#b57d10]'
+            : 'border-[#30a46c55] bg-[#30a46c1a] text-[#24875a]'"
         >
-          <TriangleAlert class="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
-            依赖提示：安装本软件前需先安装
-            <b>{{ dependsNames.join("、") }}</b>
-            ，请将依赖项一并加入任务队列。
-          </span>
+          <div class="flex items-start gap-2">
+            <TriangleAlert class="mt-0.5 h-4 w-4 shrink-0" />
+            <div class="min-w-0 flex-1">
+              <p v-if="missingDepends.length">
+                依赖提示：有 {{ missingDepends.length }} 个依赖尚未安装，建议先装依赖再装本软件。
+              </p>
+              <p v-else>依赖已就绪，可以放心安装。</p>
+              <div class="mt-1.5 space-y-0.5">
+                <p v-for="d in dependsDetail" :key="d.id" class="flex items-center gap-1.5">
+                  <span>{{ d.installed ? "✅" : d.queued ? "⏳" : "❌" }}</span>
+                  <span class="truncate">{{ d.name }}</span>
+                  <span class="text-[10px] opacity-70">
+                    {{ d.installed ? "已安装" : d.queued ? "已在队列" : "未安装" }}
+                  </span>
+                </p>
+              </div>
+              <div v-if="missingDepends.length" class="mt-2">
+                <Button variant="gray" size="sm" @click="addMissingDepends">
+                  一并加入依赖（{{ missingDepends.length }}）
+                </Button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- 更新日志滚动区 -->
