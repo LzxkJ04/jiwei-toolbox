@@ -27,6 +27,14 @@ export interface LicenseStatus {
   partialKey: string;
   productId: string;
   licensed: boolean;
+  /** 完整版本号 */
+  build?: string;
+  /** EditionID，如 Professional */
+  channel?: string;
+  /** 系统安装日期 yyyy-MM-dd */
+  installDate?: string;
+  /** 宽限期剩余分钟（仅宽限状态有意义） */
+  graceMinutes?: number;
 }
 
 export interface SoftwareItem {

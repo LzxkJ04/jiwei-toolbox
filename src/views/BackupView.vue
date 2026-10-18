@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 清单备份：后端持久化（data\备份导出\*.jwinv.json）；导出/导入 JSON 文件用于跨电脑迁移。
 import { computed, onMounted, ref } from "vue";
-import { Download, FileUp, ListRestart, Pencil, RefreshCw, Save, Trash2 } from "lucide-vue-next";
+import { Download, FileUp, GitCompare, ListRestart, Pencil, RefreshCw, Save, Trash2 } from "lucide-vue-next";
 import PageHeader from "../components/ui/PageHeader.vue";
 import Card from "../components/ui/Card.vue";
 import Button from "../components/ui/Button.vue";
@@ -159,6 +159,87 @@ async function exportInventory(b: InventoryMeta) {
   toast("清单已导出", "success");
 }
 
+/* ---- 清单对比：这份清单和本机现状差多少 ---- */
+const compareOpen = ref(false);
+const compareName = ref("");
+const compareLoading = ref(false);
+const compareResult = ref<{
+  inList: { name: string; version: string }[];
+  missing: { name: string; version: string }[];
+  extra: { name: string; version: string }[];
+  inLibrary: number;
+} | null>(null);
+
+const lower = (s: string) => (s || "").trim().toLowerCase();
+
+/** 判断两份软件名是否指同一个软件（互包含即可，兼容中英文名差异） */
+function sameApp(a: string, b: string) {
+  const x = lower(a);
+  const y = lower(b);
+  if (!x || !y) return false;
+  return x === y || x.includes(y) || y.includes(x);
+}
+
+async function compareInventory(b: InventoryMeta) {
+  compareName.value = b.name;
+  compareOpen.value = true;
+  compareLoading.value = true;
+  compareResult.value = null;
+  const doc = await loadInventoryDoc(b.name);
+  if (doc === null) {
+    compareLoading.value = false;
+    toast("清单文件损坏或不存在", "error");
+    compareOpen.value = false;
+    return;
+  }
+  // 本机现状：重新枚举，避免用旧缓存判断
+  const installed = (await listInstalled()) ?? [];
+  const installedNames = installed.map((a) => a.name);
+
+  const missing = doc.apps.filter((a) => !installedNames.some((n) => sameApp(n, a.name)));
+  // 清单之后新装、不在清单里的软件（只列名字，便于判断是否需要补进清单）
+  const extra = installed
+    .filter((a) => !doc.apps.some((d) => sameApp(a.name, d.name)))
+    .map((a) => ({ name: a.name, version: a.version }));
+
+  await store.load();
+  const items = store.items ?? [];
+  const inLibrary = doc.apps.filter((a) => items.some((i) => sameApp(i.name, a.name))).length;
+
+  compareResult.value = {
+    inList: doc.apps.map((a) => ({ name: a.name, version: a.version })),
+    missing,
+    extra: extra.slice(0, 200),
+    inLibrary,
+  };
+  compareLoading.value = false;
+}
+
+/** 把清单里缺装的软件直接勾进软件库 */
+async function selectMissing() {
+  const r = compareResult.value;
+  if (!r || r.missing.length === 0) return;
+  await store.load();
+  const items = store.items ?? [];
+  const ids: string[] = [];
+  let noMatch = 0;
+  for (const m of r.missing) {
+    const hit = items.find((i) => sameApp(i.name, m.name));
+    if (hit) ids.push(hit.id);
+    else noMatch++;
+  }
+  if (ids.length === 0) {
+    toast("缺装的软件在软件库里都没有对应条目", "warning");
+    return;
+  }
+  store.addChecked(ids);
+  compareOpen.value = false;
+  toast(
+    `已勾选 ${ids.length} 个缺装软件，可到软件库加入队列${noMatch > 0 ? `（${noMatch} 个软件库没有）` : ""}`,
+    "success"
+  );
+}
+
 /* ---- 重命名 ---- */
 const showRename = ref(false);
 const renameTarget = ref<InventoryMeta | null>(null);
@@ -305,6 +386,9 @@ async function onAutoBackup(v: boolean) {
               <Button variant="primary" size="sm" @click="loadInventory(b)">
                 <FileUp class="h-3.5 w-3.5" /> 加载清单
               </Button>
+              <Button variant="gray" size="sm" title="与本机已安装软件对比" @click="compareInventory(b)">
+                <GitCompare class="h-3.5 w-3.5" /> 对比
+              </Button>
               <Button variant="gray" size="sm" @click="exportInventory(b)">
                 <Download class="h-3.5 w-3.5" /> 导出
               </Button>
@@ -367,6 +451,73 @@ async function onAutoBackup(v: boolean) {
         <div class="flex justify-end gap-3">
           <Button variant="gray" @click="showRename = false">取消</Button>
           <Button variant="primary" @click="confirmRename">确定</Button>
+        </div>
+      </template>
+    </Dialog>
+
+    <!-- 清单与本机对比 -->
+    <Dialog :open="compareOpen" :title="`对比 · ${compareName}`" class="!max-w-2xl" @update:open="compareOpen = $event">
+      <Spinner v-if="compareLoading" label="正在枚举本机软件并比对…" />
+      <div v-else-if="compareResult" class="space-y-3">
+        <div class="grid grid-cols-3 gap-2 text-center">
+          <div class="rounded-xl border border-[var(--card-border)] bg-[var(--card-soft)] p-2.5">
+            <p class="text-[10px] text-[var(--muted)]">清单内软件</p>
+            <p class="text-xl font-bold tabular-nums">{{ compareResult.inList.length }}</p>
+          </div>
+          <div class="rounded-xl border border-[#30a46c]/40 bg-[#30a46c]/10 p-2.5">
+            <p class="text-[10px] text-[var(--muted)]">本机已装</p>
+            <p class="text-xl font-bold tabular-nums text-[#30a46c]">
+              {{ compareResult.inList.length - compareResult.missing.length }}
+            </p>
+          </div>
+          <div class="rounded-xl border border-[#e5484d]/40 bg-[#e5484d]/10 p-2.5">
+            <p class="text-[10px] text-[var(--muted)]">清单里缺装</p>
+            <p class="text-xl font-bold tabular-nums text-[#e5484d]">{{ compareResult.missing.length }}</p>
+          </div>
+        </div>
+
+        <div v-if="compareResult.missing.length" class="rounded-xl border border-[var(--card-border)] p-3">
+          <p class="mb-1.5 text-xs font-semibold text-[#e5484d]">清单里有、本机没装</p>
+          <div class="max-h-48 overflow-y-auto">
+            <p
+              v-for="(m, i) in compareResult.missing"
+              :key="`${m.name}-${i}`"
+              class="truncate py-0.5 text-xs text-[var(--text)]"
+              :title="`${m.name} ${m.version}`"
+            >
+              · {{ m.name }}<span v-if="m.version" class="ml-1 text-[var(--muted)]">{{ m.version }}</span>
+            </p>
+          </div>
+        </div>
+        <div v-else class="rounded-xl border border-[#30a46c]/40 bg-[#30a46c]/10 p-3 text-center text-xs text-[#30a46c]">
+          清单里的软件本机都已安装
+        </div>
+
+        <div v-if="compareResult.extra.length" class="rounded-xl border border-[var(--card-border)] p-3">
+          <p class="mb-1.5 text-xs font-semibold text-[var(--muted)]">
+            本机有、清单里没有（{{ compareResult.extra.length }}，可能清单生成后新装）
+          </p>
+          <div class="max-h-32 overflow-y-auto">
+            <p v-for="(e, i) in compareResult.extra" :key="`${e.name}-${i}`" class="truncate py-0.5 text-xs text-[var(--muted)]">
+              · {{ e.name }}
+            </p>
+          </div>
+        </div>
+
+        <p class="text-[10px] text-[var(--muted)]">
+          其中 {{ compareResult.inLibrary }} 个在软件库里有对应安装条目，可一键勾选补装。
+        </p>
+      </div>
+      <template #footer>
+        <div class="flex flex-wrap justify-end gap-3">
+          <Button variant="gray" @click="compareOpen = false">关闭</Button>
+          <Button
+            variant="primary"
+            :disabled="!compareResult || compareResult.missing.length === 0"
+            @click="selectMissing"
+          >
+            勾选缺装软件
+          </Button>
         </div>
       </template>
     </Dialog>

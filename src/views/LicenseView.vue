@@ -83,7 +83,21 @@ const partialShown = computed(() => {
       <Card class="p-5">
         <p class="mb-1 text-xs text-[var(--muted)]">系统版本</p>
         <p class="text-sm font-semibold text-[var(--text-strong)]">{{ dash(data.osEdition) }}</p>
-        <p class="mt-1 text-xs text-[var(--muted)]">{{ dash(data.osVersion) }}</p>
+        <p class="mt-1 text-xs text-[var(--muted)]">
+          {{ dash(data.osVersion) }}<template v-if="data.build"> · 内部版本 {{ data.build }}</template>
+        </p>
+      </Card>
+
+      <Card class="p-5">
+        <p class="mb-1 text-xs text-[var(--muted)]">系统类型</p>
+        <p class="text-sm font-semibold text-[var(--text-strong)]">{{ dash(data.channel) }}</p>
+        <p class="mt-1 text-xs text-[var(--muted)]">EditionID，来自系统注册表</p>
+      </Card>
+
+      <Card class="p-5">
+        <p class="mb-1 text-xs text-[var(--muted)]">安装日期</p>
+        <p class="text-sm font-semibold text-[var(--text-strong)]">{{ dash(data.installDate) }}</p>
+        <p class="mt-1 text-xs text-[var(--muted)]">系统首次安装时间，重装后会更新</p>
       </Card>
 
       <Card class="p-5">

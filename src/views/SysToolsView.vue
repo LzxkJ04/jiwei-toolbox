@@ -512,6 +512,38 @@ const rtLoading = ref(false);
 const rtProgress = ref<Record<string, { stage: string; pct: number }>>({});
 const rtInstalling = ref<Record<string, boolean>>({});
 
+/** 已装 / 未装统计，顶部一眼看清缺什么 */
+const rtInstalledCount = computed(() => (runtimes.value ?? []).filter((r) => r.installed).length);
+const rtMissing = computed(() => (runtimes.value ?? []).filter((r) => !r.installed));
+const rtAllInstalled = computed(
+  () => runtimes.value !== null && runtimes.value.length > 0 && rtMissing.value.length === 0
+);
+
+/** 一键安装全部缺失运行库（串行，避免多个安装器互相抢锁） */
+const rtBatchRunning = ref(false);
+async function installMissingRuntimes() {
+  const list = rtMissing.value;
+  if (list.length === 0 || rtBatchRunning.value) return;
+  rtBatchRunning.value = true;
+  let ok = 0;
+  let fail = 0;
+  for (const lib of list) {
+    rtInstalling.value[lib.id] = true;
+    rtProgress.value[lib.id] = { stage: "准备中", pct: 0 };
+    const res = await installRuntime(lib.id);
+    delete rtInstalling.value[lib.id];
+    delete rtProgress.value[lib.id];
+    if (res === null) fail++;
+    else ok++;
+    await loadRuntimes();
+  }
+  rtBatchRunning.value = false;
+  toast(
+    `批量安装完成：成功 ${ok} 个${fail > 0 ? `，失败 ${fail} 个（可点单项重试或手动下载）` : ""}`,
+    fail > 0 ? "warning" : "success"
+  );
+}
+
 async function loadRuntimes() {
   rtLoading.value = true;
   const res = await listRuntimeLibs();
@@ -1127,11 +1159,44 @@ onUnmounted(() => {
 
     <!-- ===== 6. 运行库 ===== -->
     <Card v-else-if="activeTab === 'runtime'" class="p-5">
-      <div class="mb-4 flex items-center justify-between">
-        <h4 class="font-semibold">常用运行库</h4>
-        <Button variant="gray" size="sm" :disabled="rtLoading" @click="loadRuntimes">
-          <RefreshCw class="h-3.5 w-3.5" :class="rtLoading && 'animate-spin'" /> 刷新
-        </Button>
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <h4 class="font-semibold">常用运行库</h4>
+          <span v-if="runtimes" class="text-xs text-[var(--muted)]">
+            {{ rtInstalledCount }} / {{ runtimes.length }} 已安装
+          </span>
+        </div>
+        <div class="flex items-center gap-2">
+          <Button
+            v-if="rtMissing.length"
+            variant="primary"
+            size="sm"
+            :disabled="rtBatchRunning || rtLoading"
+            :title="`依次安装 ${rtMissing.length} 个缺失运行库`"
+            @click="installMissingRuntimes"
+          >
+            <Loader2 v-if="rtBatchRunning" class="h-3.5 w-3.5 animate-spin" />
+            <Download v-else class="h-3.5 w-3.5" />
+            一键装齐（{{ rtMissing.length }}）
+          </Button>
+          <Button variant="gray" size="sm" :disabled="rtLoading || rtBatchRunning" @click="loadRuntimes">
+            <RefreshCw class="h-3.5 w-3.5" :class="rtLoading && 'animate-spin'" /> 刷新
+          </Button>
+        </div>
+      </div>
+
+      <!-- 缺失提示条 -->
+      <div
+        v-if="rtMissing.length"
+        class="mb-3 rounded-lg border border-[#f5a623]/40 bg-[#f5a623]/10 px-3 py-2 text-xs text-[#b7791f]"
+      >
+        有 {{ rtMissing.length }} 个运行库未安装：{{ rtMissing.map((r) => r.name).join("、") }}。缺少时部分软件会报「找不到 DLL」或直接启动失败。
+      </div>
+      <div
+        v-else-if="rtAllInstalled"
+        class="mb-3 rounded-lg border border-[#30a46c]/40 bg-[#30a46c]/10 px-3 py-2 text-xs text-[#30a46c]"
+      >
+        常用运行库均已就绪。
       </div>
 
       <Spinner v-if="rtLoading" label="正在检测运行库…" />

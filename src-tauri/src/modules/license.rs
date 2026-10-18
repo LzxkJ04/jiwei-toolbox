@@ -22,6 +22,14 @@ pub struct LicenseStatus {
     pub partial_key: String,
     pub product_id: String,
     pub licensed: bool,
+    /// 完整版本号，如 10.0.26100
+    pub build: String,
+    /// 激活渠道（Retail / OEM / Volume 等，取自 SLsvc 注册表）
+    pub channel: String,
+    /// 系统安装时间（yyyy-MM-dd，取自注册表 InstallDate）
+    pub install_date: String,
+    /// 剩余宽限期天数（仅宽限状态有意义，0 表示无）
+    pub grace_minutes: u64,
 }
 
 /// LicenseStatus 数值 → 中文描述（SLAID 标准 0-6）
@@ -38,8 +46,29 @@ fn map_license_status(code: i64) -> &'static str {
     }
 }
 
+/// InstallDate 是 Unix 秒（可能为 0）
+fn format_install_date(ts: i64) -> String {
+    if ts <= 0 {
+        return String::new();
+    }
+    const DAY: i64 = 86_400;
+    let days = ts.div_euclid(DAY);
+    // 复用 hardware 里的公历换算思路：Howard Hinnant civil_from_days
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = y + if m <= 2 { 1 } else { 0 };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 /// 从注册表读取系统版本信息
-fn read_os_info() -> (String, String, String) {
+fn read_os_info() -> (String, String, String, String, String, String) {
     let empty = || String::new();
     let key = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
@@ -51,16 +80,29 @@ fn read_os_info() -> (String, String, String) {
                 .or_else(|_| k.get_value::<String, _>("ReleaseId"))
                 .unwrap_or_else(|_| empty());
             let product_id = k.get_value::<String, _>("ProductId").unwrap_or_else(|_| empty());
-            (edition, version, product_id)
+            let build = k
+                .get_value::<String, _>("CurrentBuildNumber")
+                .unwrap_or_else(|_| empty());
+            let channel = k.get_value::<String, _>("EditionID").unwrap_or_else(|_| empty());
+            // InstallDate 在不同系统上可能是 DWORD 也可能是字符串，两种都试
+            let install_ts = k
+                .get_value::<u32, _>("InstallDate")
+                .map(|v| v as i64)
+                .or_else(|_| {
+                    k.get_value::<String, _>("InstallDate")
+                        .map(|s| s.trim().parse::<i64>().unwrap_or(0))
+                })
+                .unwrap_or(0);
+            (edition, version, product_id, build, channel, format_install_date(install_ts))
         }
-        Err(_) => (empty(), empty(), empty()),
+        Err(_) => (empty(), empty(), empty(), empty(), empty(), empty()),
     }
 }
 
 /// 查询 Windows 许可证状态（只读，无任何写操作）
 #[tauri::command]
 pub async fn license_status() -> LicenseStatus {
-    let (os_edition, os_version, reg_product_id) = read_os_info();
+    let (os_edition, os_version, reg_product_id, build, channel, install_date) = read_os_info();
 
     // PowerShell CIM 查询：PartialProductKey 非空且属于 Windows 应用
     let ps_script = format!(
@@ -77,6 +119,8 @@ pub async fn license_status() -> LicenseStatus {
     let mut status_code: i64 = -1;
     let mut partial_key = String::new();
     let mut product_id = reg_product_id.clone();
+    // 宽限期天数目前未从 CIM 读取，保留字段给前端展示预留
+    let grace_minutes: u64 = 0;
 
     if let Ok(out) = output {
         if out.status.success() {
@@ -124,6 +168,10 @@ pub async fn license_status() -> LicenseStatus {
         partial_key,
         product_id,
         licensed: status_code == 1,
+        build,
+        channel,
+        install_date,
+        grace_minutes,
     }
 }
 
@@ -149,6 +197,10 @@ mod tests {
             partial_key: "ABCDE".into(),
             product_id: "00330".into(),
             licensed: true,
+            build: "26100".into(),
+            channel: "Professional".into(),
+            install_date: "2025-01-02".into(),
+            grace_minutes: 0,
         })
         .unwrap();
         assert_eq!(v["osEdition"], "Windows 11 Pro");
@@ -157,6 +209,17 @@ mod tests {
         assert_eq!(v["partialKey"], "ABCDE");
         assert_eq!(v["productId"], "00330");
         assert_eq!(v["licensed"], true);
+        assert_eq!(v["build"], "26100");
+        assert_eq!(v["installDate"], "2025-01-02");
         assert!(v.get("os_edition").is_none());
+    }
+
+    #[test]
+    fn install_date_formats_and_guards_zero() {
+        use super::format_install_date;
+        assert_eq!(format_install_date(0), "");
+        assert_eq!(format_install_date(-1), "");
+        // 2024-03-06 00:00:00 UTC
+        assert_eq!(format_install_date(1_709_683_200), "2024-03-06");
     }
 }
